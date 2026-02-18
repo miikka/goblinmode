@@ -6,12 +6,21 @@ pub struct Config {
     pub hetzner_api_token: String,
     pub tailscale_auth_key: String,
     pub tailscale_api_key: String,
+    pub dotfiles_repo: Option<String>,
+    pub dotfiles_install: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ConfigFile {
     hetzner: Option<HetznerConfig>,
     tailscale: Option<TailscaleConfig>,
+    dotfiles: Option<DotfilesConfig>,
+}
+
+#[derive(Deserialize)]
+struct DotfilesConfig {
+    repo: Option<String>,
+    install: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -84,10 +93,20 @@ pub fn load_config() -> Result<Config> {
          auth_key = \"tskey-auth-...\""
     ))?;
 
+    let dotfiles = config_file.as_ref().and_then(|c| c.dotfiles.as_ref());
+    let dotfiles_repo = dotfiles
+        .and_then(|d| d.repo.clone())
+        .filter(|v| !v.is_empty());
+    let dotfiles_install = dotfiles
+        .and_then(|d| d.install.clone())
+        .filter(|v| !v.is_empty());
+
     Ok(Config {
         hetzner_api_token,
         tailscale_auth_key,
         tailscale_api_key,
+        dotfiles_repo,
+        dotfiles_install,
     })
 }
 

@@ -4,3 +4,8 @@
 * It should be investigated if the server can be run with IPv6 connectivity only.
 * There are no tests for anything.
 * There should be a repo-local config file (.config/goblinmode.toml) that specifies which ports should be exposed via Tailscale serve.
+* `git` is not configured on the VM
+* `jj` is not installed on the VM
+* `atuin` is not installed on the VM
+* There needs to be some way to install dotfiles for the user.
+* There should be a way to shutdown the server with a snapshot and restore it later. Like `down` but not destroying everything.

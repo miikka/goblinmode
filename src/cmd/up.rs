@@ -105,10 +105,19 @@ pub fn ensure_running() -> Result<Env> {
     // 8. Wait for SSH
     wait_for_ssh(&ip)?;
 
-    // 9. Push project to VM
+    // 9. Wait for cloud-init to finish (packages, tailscale, etc.)
+    wait_for_cloud_init(&username, &ip)?;
+
+    // 10. Push project to VM
     sync_project(&project.root, &project.name, &username, &ip)?;
 
-    // 10. Add git remote
+    // 11. Setup dotfiles
+    if let Some(ref repo) = cfg.dotfiles_repo {
+        let install_cmd = cfg.dotfiles_install.as_deref().unwrap_or("./install.sh");
+        setup_dotfiles(&username, &ip, repo, install_cmd);
+    }
+
+    // 12. Add git remote
     add_git_remote(&project.root, &username, &server_name, &project.name)?;
 
     Ok(Env {
@@ -211,13 +220,64 @@ fn sync_project(
     Ok(())
 }
 
+fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
+    print!("Waiting for cloud-init... ");
+    io::stdout().flush()?;
+
+    let status = Command::new("ssh")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            "cloud-init status --wait",
+        ])
+        .output()
+        .context("Failed to run ssh")?;
+
+    if status.status.success() {
+        println!("done");
+    } else {
+        let stderr = String::from_utf8_lossy(&status.stderr);
+        bail!("cloud-init failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
+    println!("Setting up dotfiles...");
+
+    let remote_cmd = format!(
+        "git clone {} ~/dotfiles && cd ~/dotfiles && {}",
+        repo, install_cmd
+    );
+
+    let result = Command::new("ssh")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            &remote_cmd,
+        ])
+        .status();
+
+    match result {
+        Ok(status) if status.success() => println!("  Dotfiles installed"),
+        Ok(status) => eprintln!(
+            "Warning: dotfiles setup failed (exit code {})",
+            status.code().unwrap_or(-1)
+        ),
+        Err(e) => eprintln!("Warning: dotfiles setup failed: {}", e),
+    }
+}
+
 fn build_cloud_init(username: &str, ssh_pubkey: &str, tailscale_auth_key: &str) -> String {
     format!(
         r#"#cloud-config
 users:
   - name: {username}
     sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
+    shell: /bin/zsh
     ssh_authorized_keys:
       - {ssh_pubkey}
 
@@ -225,6 +285,9 @@ ssh_pwauth: false
 
 package_update: true
 packages:
+  - git
+  - stow
+  - zsh
   - tmux
   - mosh
   - atuin
