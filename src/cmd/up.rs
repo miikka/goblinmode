@@ -30,7 +30,7 @@ pub fn run() -> Result<()> {
             Some((status, ip)) if status == "running" => {
                 println!("running");
                 wait_for_ssh(&ip)?;
-                println!("SSH ready: ssh {}@{}", existing.username, ip);
+                println!("SSH ready: ssh {}@{}", existing.username, existing.hostname);
                 return Ok(());
             }
             Some((status, _)) => {
@@ -61,7 +61,7 @@ pub fn run() -> Result<()> {
 
     // 5. Create server with cloud-init
     let username = whoami();
-    let user_data = build_cloud_init(&username, ssh_pubkey.trim());
+    let user_data = build_cloud_init(&username, ssh_pubkey.trim(), &cfg.tailscale_auth_key);
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}'...", server_name);
     let (server_id, _ip) =
@@ -80,6 +80,7 @@ pub fn run() -> Result<()> {
         server_id,
         ipv4: ip.clone(),
         username: username.clone(),
+        hostname: server_name.clone(),
     };
     state::save_state(&project.id, &project_state)?;
 
@@ -87,7 +88,7 @@ pub fn run() -> Result<()> {
     wait_for_ssh(&ip)?;
 
     // 10. Print SSH command
-    println!("SSH ready: ssh {}@{}", username, ip);
+    println!("SSH ready: ssh {}@{}", username, server_name);
     Ok(())
 }
 
@@ -111,7 +112,7 @@ fn wait_for_ssh(ip: &str) -> Result<()> {
     anyhow::bail!("Timed out waiting for SSH on {}", addr);
 }
 
-fn build_cloud_init(username: &str, ssh_pubkey: &str) -> String {
+fn build_cloud_init(username: &str, ssh_pubkey: &str, tailscale_auth_key: &str) -> String {
     format!(
         r#"#cloud-config
 users:
@@ -126,6 +127,8 @@ ssh_pwauth: false
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --auth-key={tailscale_auth_key} --ssh
 "#
     )
 }

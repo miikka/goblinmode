@@ -8,6 +8,8 @@ pub struct ProjectState {
     pub ipv4: String,
     #[serde(default = "default_username")]
     pub username: String,
+    #[serde(default)]
+    pub hostname: String,
 }
 
 fn default_username() -> String {
