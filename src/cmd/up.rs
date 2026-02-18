@@ -129,6 +129,12 @@ users:
 
 ssh_pwauth: false
 
+package_update: true
+packages:
+  - tmux
+  - mosh
+  - atuin
+
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
