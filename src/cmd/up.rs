@@ -30,7 +30,12 @@ pub fn run() -> Result<()> {
             Some((status, ip)) if status == "running" => {
                 println!("running");
                 wait_for_ssh(&ip)?;
-                println!("SSH ready: ssh {}@{}", existing.username, existing.hostname);
+                let hostname = if existing.hostname.is_empty() {
+                    format!("gob-{}", project.name)
+                } else {
+                    existing.hostname
+                };
+                println!("SSH ready: ssh {}@{}", existing.username, hostname);
                 return Ok(());
             }
             Some((status, _)) => {
