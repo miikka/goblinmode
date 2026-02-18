@@ -2,6 +2,7 @@ mod cmd;
 mod config;
 mod hetzner;
 mod project;
+mod project_config;
 mod state;
 mod tailscale;
 

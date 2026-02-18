@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::config;
 use crate::hetzner::HetznerClient;
 use crate::project;
+use crate::project_config;
 use crate::state;
 
 /// Connection info for a running environment.
@@ -39,6 +40,8 @@ pub fn ensure_running() -> Result<Env> {
             Some((status, ip)) if status == "running" => {
                 println!("running");
                 wait_for_ssh(&existing.username, &ip)?;
+                let project_config = project_config::load_project_config(&project.root)?;
+                setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
                 let hostname = if existing.hostname.is_empty() {
                     format!("gob-{}", project.name)
                 } else {
@@ -107,16 +110,20 @@ pub fn ensure_running() -> Result<Env> {
     // 9. Wait for cloud-init to finish (packages, tailscale, etc.)
     wait_for_cloud_init(&username, &ip)?;
 
-    // 10. Push project to VM
+    // 10. Configure tailscale serve ports
+    let project_config = project_config::load_project_config(&project.root)?;
+    setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
+
+    // 11. Push project to VM
     sync_project(&project.root, &project.name, &username, &ip)?;
 
-    // 11. Setup dotfiles
+    // 12. Setup dotfiles
     if let Some(ref repo) = cfg.dotfiles_repo {
         let install_cmd = cfg.dotfiles_install.as_deref().unwrap_or("./install.sh");
         setup_dotfiles(&username, &ip, repo, install_cmd);
     }
 
-    // 12. Add git remote
+    // 13. Add git remote
     add_git_remote(&project.root, &username, &server_name, &project.name)?;
 
     Ok(Env {
@@ -287,6 +294,31 @@ fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
             status.code().unwrap_or(-1)
         ),
         Err(e) => eprintln!("Warning: dotfiles setup failed: {}", e),
+    }
+}
+
+fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
+    for port in ports {
+        println!("Setting up tailscale serve for port {}...", port);
+        let result = Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                &format!("{}@{}", username, ip),
+                &format!("sudo tailscale serve --bg {}", port),
+            ])
+            .status();
+        match result {
+            Ok(s) if s.success() => {}
+            Ok(_) => eprintln!(
+                "Warning: failed to configure tailscale serve for port {}",
+                port
+            ),
+            Err(e) => eprintln!(
+                "Warning: failed to configure tailscale serve for port {}: {}",
+                port, e
+            ),
+        }
     }
 }
 
