@@ -363,6 +363,7 @@ packages:
   - tmux
   - mosh
   - atuin
+  - starship
   - just{extra_packages}
 
 runcmd:
