@@ -38,6 +38,8 @@ pub fn load_config() -> Result<Config> {
         None
     };
 
+    let config_path_display = config_path.display();
+
     let hetzner_api_token = resolve_value(
         "HETZNER_API_TOKEN",
         config_file
@@ -45,12 +47,12 @@ pub fn load_config() -> Result<Config> {
             .and_then(|c| c.hetzner.as_ref())
             .and_then(|h| h.api_token.as_deref()),
     )
-    .context(
+    .context(format!(
         "Hetzner API token not found.\n\
-         Set HETZNER_API_TOKEN env var or add to ~/.config/goblinmode/config.toml:\n\n\
+         Set HETZNER_API_TOKEN env var or add to {config_path_display}:\n\n\
          [hetzner]\n\
-         api_token = \"your-token-here\"",
-    )?;
+         api_token = \"your-token-here\""
+    ))?;
 
     let tailscale_auth_key = resolve_value(
         "TAILSCALE_AUTH_KEY",
@@ -59,12 +61,12 @@ pub fn load_config() -> Result<Config> {
             .and_then(|c| c.tailscale.as_ref())
             .and_then(|t| t.auth_key.as_deref()),
     )
-    .context(
+    .context(format!(
         "Tailscale auth key not found.\n\
-         Set TAILSCALE_AUTH_KEY env var or add to ~/.config/goblinmode/config.toml:\n\n\
+         Set TAILSCALE_AUTH_KEY env var or add to {config_path_display}:\n\n\
          [tailscale]\n\
-         auth_key = \"tskey-auth-...\"",
-    )?;
+         auth_key = \"tskey-auth-...\""
+    ))?;
 
     Ok(Config {
         hetzner_api_token,
