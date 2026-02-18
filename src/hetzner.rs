@@ -215,6 +215,26 @@ impl HetznerClient {
         }
     }
 
+    /// Delete a server.
+    pub fn delete_server(&self, server_id: u64) -> Result<()> {
+        let resp = self
+            .client
+            .delete(format!("{}/servers/{}", BASE_URL, server_id))
+            .bearer_auth(&self.token)
+            .send()
+            .context("HTTP request failed")?;
+
+        if resp.status().as_u16() == 404 {
+            bail!("Server {} not found", server_id);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            bail!("Failed to delete server ({}): {}", status, body);
+        }
+        Ok(())
+    }
+
     /// Check if a server still exists and is running.
     pub fn get_server_status(&self, server_id: u64) -> Result<Option<(String, String)>> {
         let resp = self.get(&format!("/servers/{}", server_id))?;

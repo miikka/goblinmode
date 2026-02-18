@@ -40,3 +40,12 @@ pub fn save_state(project_id: &str, state: &ProjectState) -> Result<()> {
         .with_context(|| format!("Failed to write state to {}", path.display()))?;
     Ok(())
 }
+
+pub fn delete_state(project_id: &str) -> Result<()> {
+    let path = state_path(project_id)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("Failed to delete state at {}", path.display()))?;
+    }
+    Ok(())
+}
