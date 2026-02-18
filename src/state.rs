@@ -6,7 +6,12 @@ use std::fs;
 pub struct ProjectState {
     pub server_id: u64,
     pub ipv4: String,
-    pub ssh_key_id: u64,
+    #[serde(default = "default_username")]
+    pub username: String,
+}
+
+fn default_username() -> String {
+    "root".to_string()
 }
 
 fn state_path(project_id: &str) -> Result<std::path::PathBuf> {

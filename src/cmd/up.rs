@@ -30,7 +30,7 @@ pub fn run() -> Result<()> {
             Some((status, ip)) if status == "running" => {
                 println!("running");
                 wait_for_ssh(&ip)?;
-                println!("SSH ready: ssh root@{}", ip);
+                println!("SSH ready: ssh {}@{}", existing.username, ip);
                 return Ok(());
             }
             Some((status, _)) => {
@@ -59,17 +59,13 @@ pub fn run() -> Result<()> {
         )
     })?;
 
-    // 5. Ensure SSH key is registered in Hetzner
-    print!("Ensuring SSH key is registered... ");
-    io::stdout().flush()?;
-    let ssh_key_name = format!("gob-{}", whoami());
-    let ssh_key_id = client.ensure_ssh_key(&ssh_key_name, ssh_pubkey.trim())?;
-
-    // 6. Create server
+    // 5. Create server with cloud-init
+    let username = whoami();
+    let user_data = build_cloud_init(&username, ssh_pubkey.trim());
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}'...", server_name);
     let (server_id, _ip) =
-        client.create_server(&server_name, "cx23", "debian-13", "hel1", &[ssh_key_id])?;
+        client.create_server(&server_name, "cx23", "debian-13", "hel1", Some(&user_data))?;
     println!(
         "  Server created (id: {}), waiting for it to start...",
         server_id
@@ -83,7 +79,7 @@ pub fn run() -> Result<()> {
     let project_state = state::ProjectState {
         server_id,
         ipv4: ip.clone(),
-        ssh_key_id,
+        username: username.clone(),
     };
     state::save_state(&project.id, &project_state)?;
 
@@ -91,7 +87,7 @@ pub fn run() -> Result<()> {
     wait_for_ssh(&ip)?;
 
     // 10. Print SSH command
-    println!("SSH ready: ssh root@{}", ip);
+    println!("SSH ready: ssh {}@{}", username, ip);
     Ok(())
 }
 
@@ -113,6 +109,25 @@ fn wait_for_ssh(ip: &str) -> Result<()> {
     }
 
     anyhow::bail!("Timed out waiting for SSH on {}", addr);
+}
+
+fn build_cloud_init(username: &str, ssh_pubkey: &str) -> String {
+    format!(
+        r#"#cloud-config
+users:
+  - name: {username}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {ssh_pubkey}
+
+ssh_pwauth: false
+
+runcmd:
+  - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+"#
+    )
 }
 
 fn whoami() -> String {

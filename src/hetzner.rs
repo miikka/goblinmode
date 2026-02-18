@@ -10,28 +10,6 @@ pub struct HetznerClient {
 }
 
 #[derive(Debug, Deserialize)]
-struct SshKeysResponse {
-    ssh_keys: Vec<SshKey>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SshKeyResponse {
-    ssh_key: SshKey,
-}
-
-#[derive(Debug, Deserialize)]
-struct SshKey {
-    id: u64,
-    fingerprint: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CreateSshKeyRequest {
-    name: String,
-    public_key: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ServerResponse {
     server: Server,
 }
@@ -59,18 +37,8 @@ struct CreateServerRequest {
     server_type: String,
     image: String,
     location: String,
-    ssh_keys: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ErrorResponse {
-    error: ApiError,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    message: String,
-    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_data: Option<String>,
 }
 
 impl HetznerClient {
@@ -102,63 +70,6 @@ impl HetznerClient {
         Ok(resp)
     }
 
-    /// Ensure SSH key is registered in Hetzner. Returns the key ID.
-    pub fn ensure_ssh_key(&self, name: &str, public_key: &str) -> Result<u64> {
-        // List existing keys and check by fingerprint
-        let resp = self.get("/ssh_keys")?;
-        if !resp.status().is_success() {
-            bail!("Failed to list SSH keys: {}", resp.status());
-        }
-        let keys: SshKeysResponse = resp.json().context("Failed to parse SSH keys response")?;
-
-        // Compute fingerprint to match against existing keys
-        // We'll try to create and handle uniqueness_error if key already exists
-        let req = CreateSshKeyRequest {
-            name: name.to_string(),
-            public_key: public_key.to_string(),
-        };
-        let resp = self.post_json("/ssh_keys", &req)?;
-
-        if resp.status().is_success() || resp.status().as_u16() == 201 {
-            let created: SshKeyResponse =
-                resp.json().context("Failed to parse SSH key response")?;
-            println!("  SSH key uploaded: {}", created.ssh_key.fingerprint);
-            return Ok(created.ssh_key.id);
-        }
-
-        // If uniqueness error, find the existing key by matching public key content
-        let err_body: Result<ErrorResponse, _> = resp.json();
-        if let Ok(err) = err_body {
-            if err.error.code == "uniqueness_error" {
-                for key in &keys.ssh_keys {
-                    let detail_resp = self.get(&format!("/ssh_keys/{}", key.id))?;
-                    if detail_resp.status().is_success() {
-                        let detail: SshKeyDetailResponse = detail_resp
-                            .json()
-                            .context("Failed to parse SSH key detail")?;
-                        if normalize_pubkey(&detail.ssh_key.public_key)
-                            == normalize_pubkey(public_key)
-                        {
-                            println!(
-                                "  SSH key already registered: {}",
-                                detail.ssh_key.fingerprint
-                            );
-                            return Ok(detail.ssh_key.id);
-                        }
-                    }
-                }
-                bail!("SSH key uniqueness error but could not find matching key");
-            }
-            bail!(
-                "Failed to create SSH key: {} ({})",
-                err.error.message,
-                err.error.code
-            );
-        }
-
-        bail!("Failed to create SSH key: unexpected error");
-    }
-
     /// Create a server. Returns (server_id, ipv4).
     pub fn create_server(
         &self,
@@ -166,14 +77,14 @@ impl HetznerClient {
         server_type: &str,
         image: &str,
         location: &str,
-        ssh_key_ids: &[u64],
+        user_data: Option<&str>,
     ) -> Result<(u64, String)> {
         let req = CreateServerRequest {
             name: name.to_string(),
             server_type: server_type.to_string(),
             image: image.to_string(),
             location: location.to_string(),
-            ssh_keys: ssh_key_ids.to_vec(),
+            user_data: user_data.map(|s| s.to_string()),
         };
         let resp = self.post_json("/servers", &req)?;
 
@@ -249,27 +160,5 @@ impl HetznerClient {
             server.server.status,
             server.server.public_net.ipv4.ip,
         )))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct SshKeyDetailResponse {
-    ssh_key: SshKeyDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct SshKeyDetail {
-    id: u64,
-    fingerprint: String,
-    public_key: String,
-}
-
-fn normalize_pubkey(key: &str) -> String {
-    // Strip comments and whitespace for comparison
-    let parts: Vec<&str> = key.trim().split_whitespace().collect();
-    if parts.len() >= 2 {
-        format!("{} {}", parts[0], parts[1])
-    } else {
-        key.trim().to_string()
     }
 }
