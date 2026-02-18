@@ -81,7 +81,13 @@ pub fn ensure_running() -> Result<Env> {
 
     // 5. Create server with cloud-init
     let username = whoami();
-    let user_data = build_cloud_init(&username, ssh_pubkey.trim(), &cfg.tailscale_auth_key);
+    let is_rust = project.root.join("Cargo.toml").exists();
+    let user_data = build_cloud_init(
+        &username,
+        ssh_pubkey.trim(),
+        &cfg.tailscale_auth_key,
+        is_rust,
+    );
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}'...", server_name);
     let (server_id, _ip) =
@@ -322,7 +328,22 @@ fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
     }
 }
 
-fn build_cloud_init(username: &str, ssh_pubkey: &str, tailscale_auth_key: &str) -> String {
+fn build_cloud_init(
+    username: &str,
+    ssh_pubkey: &str,
+    tailscale_auth_key: &str,
+    is_rust: bool,
+) -> String {
+    let extra_packages = if is_rust {
+        "\n  - build-essential\n  - rustup"
+    } else {
+        ""
+    };
+    let rust_cmds = if is_rust {
+        format!("\n  - su - {username} -c 'rustup default stable'")
+    } else {
+        String::new()
+    };
     format!(
         r#"#cloud-config
 users:
@@ -342,13 +363,13 @@ packages:
   - tmux
   - mosh
   - atuin
-  - just
+  - just{extra_packages}
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh
+  - tailscale up --auth-key={tailscale_auth_key} --ssh{rust_cmds}
 "#
     )
 }
