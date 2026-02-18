@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, Write};
-use std::net::TcpStream;
 use std::process::Command;
 use std::time::Duration;
 
@@ -39,7 +38,7 @@ pub fn ensure_running() -> Result<Env> {
         match client.get_server_status(existing.server_id)? {
             Some((status, ip)) if status == "running" => {
                 println!("running");
-                wait_for_ssh(&ip)?;
+                wait_for_ssh(&existing.username, &ip)?;
                 let hostname = if existing.hostname.is_empty() {
                     format!("gob-{}", project.name)
                 } else {
@@ -103,7 +102,7 @@ pub fn ensure_running() -> Result<Env> {
     state::save_state(&project.id, &project_state)?;
 
     // 8. Wait for SSH
-    wait_for_ssh(&ip)?;
+    wait_for_ssh(&username, &ip)?;
 
     // 9. Wait for cloud-init to finish (packages, tailscale, etc.)
     wait_for_cloud_init(&username, &ip)?;
@@ -133,24 +132,37 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn wait_for_ssh(ip: &str) -> Result<()> {
+fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for SSH... ");
     io::stdout().flush()?;
 
-    let addr = format!("{}:22", ip);
-    let timeout = Duration::from_secs(2);
     let max_attempts = 60; // 2 minutes max
+    let target = format!("{}@{}", username, ip);
 
     for _ in 0..max_attempts {
-        if TcpStream::connect_timeout(&addr.parse().context("Invalid IP address")?, timeout).is_ok()
-        {
-            println!("ok");
-            return Ok(());
+        let result = Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "ConnectTimeout=2",
+                "-o",
+                "BatchMode=yes",
+                &target,
+                "true",
+            ])
+            .output();
+
+        if let Ok(output) = result {
+            if output.status.success() {
+                println!("ok");
+                return Ok(());
+            }
         }
         std::thread::sleep(Duration::from_secs(2));
     }
 
-    anyhow::bail!("Timed out waiting for SSH on {}", addr);
+    anyhow::bail!("Timed out waiting for SSH on {}", ip);
 }
 
 fn add_git_remote(
@@ -224,7 +236,7 @@ fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for cloud-init... ");
     io::stdout().flush()?;
 
-    let status = Command::new("ssh")
+    let output = Command::new("ssh")
         .args([
             "-o",
             "StrictHostKeyChecking=accept-new",
@@ -234,11 +246,18 @@ fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
         .output()
         .context("Failed to run ssh")?;
 
-    if status.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if output.status.success() || stdout.contains("status: done") {
         println!("done");
     } else {
-        let stderr = String::from_utf8_lossy(&status.stderr);
-        bail!("cloud-init failed: {}", stderr.trim());
+        let msg = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        bail!("cloud-init failed: {}", msg);
     }
 
     Ok(())
