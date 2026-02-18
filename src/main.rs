@@ -3,6 +3,7 @@ mod config;
 mod hetzner;
 mod project;
 mod state;
+mod tailscale;
 
 use clap::{Parser, Subcommand};
 

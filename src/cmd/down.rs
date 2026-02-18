@@ -4,6 +4,7 @@ use crate::config;
 use crate::hetzner::HetznerClient;
 use crate::project;
 use crate::state;
+use crate::tailscale::TailscaleClient;
 
 pub fn run() -> Result<()> {
     // 1. Detect project root
@@ -16,15 +17,27 @@ pub fn run() -> Result<()> {
         None => bail!("No server found for this project. Nothing to do."),
     };
 
-    // 3. Load config and delete the server
+    // 3. Load config
     let cfg = config::load_config()?;
-    let client = HetznerClient::new(cfg.hetzner_api_token);
 
+    // 4. Remove from Tailscale
+    let hostname = if existing.hostname.is_empty() {
+        format!("gob-{}", project.name)
+    } else {
+        existing.hostname
+    };
+    let ts_client = TailscaleClient::new(cfg.tailscale_api_key);
+    if let Err(e) = ts_client.delete_device_by_hostname(&hostname) {
+        eprintln!("Warning: failed to remove Tailscale device: {}", e);
+    }
+
+    // 5. Delete Hetzner server
+    let hetzner_client = HetznerClient::new(cfg.hetzner_api_token);
     println!(
         "Deleting server {} (id: {})...",
         existing.ipv4, existing.server_id
     );
-    match client.delete_server(existing.server_id) {
+    match hetzner_client.delete_server(existing.server_id) {
         Ok(()) => println!("Server deleted."),
         Err(e) => {
             eprintln!("Warning: failed to delete server: {}", e);
@@ -32,7 +45,7 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 4. Remove state
+    // 6. Remove state
     state::delete_state(&project.id)?;
     println!("Done.");
     Ok(())

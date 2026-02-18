@@ -5,6 +5,7 @@ use std::fs;
 pub struct Config {
     pub hetzner_api_token: String,
     pub tailscale_auth_key: String,
+    pub tailscale_api_key: String,
 }
 
 #[derive(Deserialize)]
@@ -21,6 +22,7 @@ struct HetznerConfig {
 #[derive(Deserialize)]
 struct TailscaleConfig {
     auth_key: Option<String>,
+    api_key: Option<String>,
 }
 
 pub fn load_config() -> Result<Config> {
@@ -54,6 +56,20 @@ pub fn load_config() -> Result<Config> {
          api_token = \"your-token-here\""
     ))?;
 
+    let tailscale_api_key = resolve_value(
+        "TAILSCALE_API_KEY",
+        config_file
+            .as_ref()
+            .and_then(|c| c.tailscale.as_ref())
+            .and_then(|t| t.api_key.as_deref()),
+    )
+    .context(format!(
+        "Tailscale API key not found.\n\
+         Set TAILSCALE_API_KEY env var or add to {config_path_display}:\n\n\
+         [tailscale]\n\
+         api_key = \"tskey-api-...\""
+    ))?;
+
     let tailscale_auth_key = resolve_value(
         "TAILSCALE_AUTH_KEY",
         config_file
@@ -71,6 +87,7 @@ pub fn load_config() -> Result<Config> {
     Ok(Config {
         hetzner_api_token,
         tailscale_auth_key,
+        tailscale_api_key,
     })
 }
 
