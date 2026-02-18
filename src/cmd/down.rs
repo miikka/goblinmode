@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use std::process::Command;
 
 use crate::config;
 use crate::hetzner::HetznerClient;

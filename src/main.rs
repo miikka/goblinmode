@@ -20,6 +20,8 @@ enum Commands {
     Up,
     /// Destroy the development VM for the current project
     Down,
+    /// Connect to the development VM with mosh
+    Mosh,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -28,5 +30,6 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Up => cmd::up::run(),
         Commands::Down => cmd::down::run(),
+        Commands::Mosh => cmd::mosh::run(),
     }
 }

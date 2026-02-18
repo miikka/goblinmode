@@ -9,7 +9,15 @@ use crate::hetzner::HetznerClient;
 use crate::project;
 use crate::state;
 
-pub fn run() -> Result<()> {
+/// Connection info for a running environment.
+pub struct Env {
+    pub username: String,
+    pub hostname: String,
+}
+
+/// Ensure the dev environment is running, provisioning if needed.
+/// Returns connection info.
+pub fn ensure_running() -> Result<Env> {
     // 1. Detect project root
     let project = project::detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
@@ -35,8 +43,10 @@ pub fn run() -> Result<()> {
                 } else {
                     existing.hostname
                 };
-                println!("SSH ready: ssh {}@{}", existing.username, hostname);
-                return Ok(());
+                return Ok(Env {
+                    username: existing.username,
+                    hostname,
+                });
             }
             Some((status, _)) => {
                 println!("{}", status);
@@ -76,11 +86,11 @@ pub fn run() -> Result<()> {
         server_id
     );
 
-    // 7. Poll until running
+    // 6. Poll until running
     let ip = client.wait_for_server(server_id)?;
     println!("  Server running at {}", ip);
 
-    // 8. Save state
+    // 7. Save state
     let project_state = state::ProjectState {
         server_id,
         ipv4: ip.clone(),
@@ -89,11 +99,18 @@ pub fn run() -> Result<()> {
     };
     state::save_state(&project.id, &project_state)?;
 
-    // 9. Wait for SSH
+    // 8. Wait for SSH
     wait_for_ssh(&ip)?;
 
-    // 10. Print SSH command
-    println!("SSH ready: ssh {}@{}", username, server_name);
+    Ok(Env {
+        username,
+        hostname: server_name,
+    })
+}
+
+pub fn run() -> Result<()> {
+    let env = ensure_running()?;
+    println!("SSH ready: ssh {}@{}", env.username, env.hostname);
     Ok(())
 }
 
