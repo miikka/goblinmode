@@ -4,12 +4,16 @@ use std::fs;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectState {
+    #[serde(default)]
     pub server_id: u64,
+    #[serde(default)]
     pub ipv4: String,
     #[serde(default = "default_username")]
     pub username: String,
     #[serde(default)]
     pub hostname: String,
+    #[serde(default)]
+    pub snapshot_id: Option<u64>,
 }
 
 fn default_username() -> String {

@@ -26,43 +26,52 @@ pub fn ensure_running() -> Result<Env> {
 
     // 2. Load config
     let cfg = config::load_config()?;
-    let client = HetznerClient::new(cfg.hetzner_api_token);
+    let client = HetznerClient::new(cfg.hetzner_api_token.clone());
 
     // 3. Check existing state
     if let Some(existing) = state::load_state(&project.id)? {
-        print!(
-            "Existing server found (id: {}), checking status... ",
-            existing.server_id
-        );
-        io::stdout().flush()?;
+        // 3a. Check for snapshot restore
+        if let Some(snapshot_id) = existing.snapshot_id {
+            return restore_from_snapshot(
+                &project, &cfg, &client, snapshot_id, &existing,
+            );
+        }
 
-        match client.get_server_status(existing.server_id)? {
-            Some((status, ip)) if status == "running" => {
-                println!("running");
-                wait_for_ssh(&existing.username, &ip)?;
-                let project_config = project_config::load_project_config(&project.root)?;
-                setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
-                let hostname = if existing.hostname.is_empty() {
-                    format!("gob-{}", project.name)
-                } else {
-                    existing.hostname
-                };
-                return Ok(Env {
-                    username: existing.username,
-                    hostname,
-                    project_name: project.name,
-                });
-            }
-            Some((status, _)) => {
-                println!("{}", status);
-                println!(
-                    "Server is not running (status: {}). Creating a new one.",
-                    status
-                );
-            }
-            None => {
-                println!("not found");
-                println!("Server no longer exists. Creating a new one.");
+        if existing.server_id != 0 {
+            print!(
+                "Existing server found (id: {}), checking status... ",
+                existing.server_id
+            );
+            io::stdout().flush()?;
+
+            match client.get_server_status(existing.server_id)? {
+                Some((status, ip)) if status == "running" => {
+                    println!("running");
+                    wait_for_ssh(&existing.username, &ip)?;
+                    let project_config = project_config::load_project_config(&project.root)?;
+                    setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
+                    let hostname = if existing.hostname.is_empty() {
+                        format!("gob-{}", project.name)
+                    } else {
+                        existing.hostname
+                    };
+                    return Ok(Env {
+                        username: existing.username,
+                        hostname,
+                        project_name: project.name,
+                    });
+                }
+                Some((status, _)) => {
+                    println!("{}", status);
+                    println!(
+                        "Server is not running (status: {}). Creating a new one.",
+                        status
+                    );
+                }
+                None => {
+                    println!("not found");
+                    println!("Server no longer exists. Creating a new one.");
+                }
             }
         }
     }
@@ -79,6 +88,10 @@ pub fn ensure_running() -> Result<Env> {
         )
     })?;
 
+    // 4b. Ensure goblinmode SSH key exists and is uploaded to Hetzner
+    let goblin_pubkey = ensure_goblin_ssh_key()?;
+    let hetzner_key_id = client.ensure_ssh_key("goblinmode", &goblin_pubkey)?;
+
     // 5. Create server with cloud-init
     let username = whoami();
     let is_rust = project.root.join("Cargo.toml").exists();
@@ -90,8 +103,14 @@ pub fn ensure_running() -> Result<Env> {
     );
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}'...", server_name);
-    let (server_id, _ip) =
-        client.create_server(&server_name, "cx23", "debian-13", "hel1", Some(&user_data))?;
+    let (server_id, _ip) = client.create_server(
+        &server_name,
+        "cx23",
+        "debian-13",
+        "hel1",
+        Some(&user_data),
+        Some(vec![hetzner_key_id]),
+    )?;
     println!(
         "  Server created (id: {}), waiting for it to start...",
         server_id
@@ -107,6 +126,7 @@ pub fn ensure_running() -> Result<Env> {
         ipv4: ip.clone(),
         username: username.clone(),
         hostname: server_name.clone(),
+        snapshot_id: None,
     };
     state::save_state(&project.id, &project_state)?;
 
@@ -143,6 +163,104 @@ pub fn run() -> Result<()> {
     let env = ensure_running()?;
     println!("SSH ready: ssh {}@{}", env.username, env.hostname);
     Ok(())
+}
+
+fn restore_from_snapshot(
+    project: &crate::project::Project,
+    cfg: &config::Config,
+    client: &HetznerClient,
+    snapshot_id: u64,
+    existing: &state::ProjectState,
+) -> Result<Env> {
+    println!("Restoring from snapshot (image: {})...", snapshot_id);
+
+    let server_name = if existing.hostname.is_empty() {
+        format!("gob-{}", project.name)
+    } else {
+        existing.hostname.clone()
+    };
+    let username = if existing.username.is_empty() {
+        whoami()
+    } else {
+        existing.username.clone()
+    };
+
+    // Ensure goblinmode SSH key exists and is uploaded to Hetzner
+    let goblin_pubkey = ensure_goblin_ssh_key()?;
+    let hetzner_key_id = client.ensure_ssh_key("goblinmode", &goblin_pubkey)?;
+
+    // Create server from snapshot (no cloud-init needed)
+    let (server_id, _ip) = client.create_server(
+        &server_name,
+        "cx23",
+        &snapshot_id.to_string(),
+        "hel1",
+        None,
+        Some(vec![hetzner_key_id]),
+    )?;
+    println!("  Server created (id: {}), waiting for it to start...", server_id);
+
+    let ip = client.wait_for_server(server_id)?;
+    println!("  Server running at {}", ip);
+
+    // Save state immediately
+    let project_state = state::ProjectState {
+        server_id,
+        ipv4: ip.clone(),
+        username: username.clone(),
+        hostname: server_name.clone(),
+        snapshot_id: None,
+    };
+    state::save_state(&project.id, &project_state)?;
+
+    // Wait for SSH
+    wait_for_ssh(&username, &ip)?;
+
+    // Re-authenticate tailscale
+    print!("Re-authenticating Tailscale... ");
+    io::stdout().flush()?;
+    let ts_result = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            &format!(
+                "sudo tailscale up --auth-key={} --ssh",
+                cfg.tailscale_auth_key
+            ),
+        ])
+        .output();
+    match ts_result {
+        Ok(output) if output.status.success() => println!("ok"),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Warning: tailscale re-auth may have failed: {}", stderr.trim());
+        }
+        Err(e) => eprintln!("Warning: tailscale re-auth failed: {}", e),
+    }
+
+    // Configure tailscale serve ports
+    let project_config = project_config::load_project_config(&project.root)?;
+    setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
+
+    // Sync project
+    sync_project(&project.root, &project.name, &username, &ip)?;
+
+    // Update git remote
+    add_git_remote(&project.root, &username, &server_name, &project.name)?;
+
+    // Delete old snapshot
+    print!("Cleaning up snapshot... ");
+    io::stdout().flush()?;
+    match client.delete_image(snapshot_id) {
+        Ok(()) => println!("done"),
+        Err(e) => eprintln!("Warning: failed to delete snapshot: {}", e),
+    }
+
+    Ok(Env {
+        username,
+        hostname: server_name,
+        project_name: project.name.clone(),
+    })
 }
 
 fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
@@ -379,4 +497,36 @@ fn whoami() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Ensure a goblinmode SSH key pair exists in the data directory.
+/// Returns the public key contents.
+fn ensure_goblin_ssh_key() -> Result<String> {
+    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
+    let key_dir = data_dir.join("goblinmode");
+    fs::create_dir_all(&key_dir)?;
+
+    let private_key_path = key_dir.join("id_ed25519");
+    let public_key_path = key_dir.join("id_ed25519.pub");
+
+    if !private_key_path.exists() {
+        println!("Generating goblinmode SSH key...");
+        let status = Command::new("ssh-keygen")
+            .args([
+                "-t", "ed25519",
+                "-f", &private_key_path.to_string_lossy(),
+                "-N", "",
+                "-C", "goblinmode",
+            ])
+            .status()
+            .context("Failed to run ssh-keygen")?;
+        if !status.success() {
+            bail!("ssh-keygen failed");
+        }
+    }
+
+    let pubkey = fs::read_to_string(&public_key_path).with_context(|| {
+        format!("Failed to read {}", public_key_path.display())
+    })?;
+    Ok(pubkey.trim().to_string())
 }

@@ -25,6 +25,8 @@ enum Commands {
     Mosh,
     /// Open the remote project in Zed
     Zed,
+    /// Snapshot the VM and destroy it (resume with `gob up`)
+    Pause,
     /// Show the status of the development VM
     #[command(alias = "ps")]
     Status,
@@ -36,6 +38,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Up => cmd::up::run(),
         Commands::Down => cmd::down::run(),
+        Commands::Pause => cmd::pause::run(),
         Commands::Mosh => cmd::mosh::run(),
         Commands::Zed => cmd::zed::run(),
         Commands::Status => cmd::status::run(),

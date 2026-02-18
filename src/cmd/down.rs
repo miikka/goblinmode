@@ -34,15 +34,26 @@ pub fn run() -> Result<()> {
 
     // 5. Delete Hetzner server
     let hetzner_client = HetznerClient::new(cfg.hetzner_api_token);
-    println!(
-        "Deleting server {} (id: {})...",
-        existing.ipv4, existing.server_id
-    );
-    match hetzner_client.delete_server(existing.server_id) {
-        Ok(()) => println!("Server deleted."),
-        Err(e) => {
-            eprintln!("Warning: failed to delete server: {}", e);
-            eprintln!("Clearing local state anyway.");
+    if existing.server_id != 0 {
+        println!(
+            "Deleting server {} (id: {})...",
+            existing.ipv4, existing.server_id
+        );
+        match hetzner_client.delete_server(existing.server_id) {
+            Ok(()) => println!("Server deleted."),
+            Err(e) => {
+                eprintln!("Warning: failed to delete server: {}", e);
+                eprintln!("Clearing local state anyway.");
+            }
+        }
+    }
+
+    // 5b. Delete snapshot if present
+    if let Some(snapshot_id) = existing.snapshot_id {
+        print!("Deleting snapshot (image: {})... ", snapshot_id);
+        match hetzner_client.delete_image(snapshot_id) {
+            Ok(()) => println!("done"),
+            Err(e) => eprintln!("Warning: failed to delete snapshot: {}", e),
         }
     }
 
