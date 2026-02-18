@@ -24,6 +24,9 @@ enum Commands {
     Mosh,
     /// Open the remote project in Zed
     Zed,
+    /// Show the status of the development VM
+    #[command(alias = "ps")]
+    Status,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -34,5 +37,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Down => cmd::down::run(),
         Commands::Mosh => cmd::mosh::run(),
         Commands::Zed => cmd::zed::run(),
+        Commands::Status => cmd::status::run(),
     }
 }
