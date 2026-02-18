@@ -14,6 +14,7 @@ use crate::state;
 pub struct Env {
     pub username: String,
     pub hostname: String,
+    pub project_name: String,
 }
 
 /// Ensure the dev environment is running, provisioning if needed.
@@ -47,6 +48,7 @@ pub fn ensure_running() -> Result<Env> {
                 return Ok(Env {
                     username: existing.username,
                     hostname,
+                    project_name: project.name,
                 });
             }
             Some((status, _)) => {
@@ -106,9 +108,13 @@ pub fn ensure_running() -> Result<Env> {
     // 9. Push project to VM
     sync_project(&project.root, &project.name, &username, &ip)?;
 
+    // 10. Add git remote
+    add_git_remote(&project.root, &username, &server_name, &project.name)?;
+
     Ok(Env {
         username,
         hostname: server_name,
+        project_name: project.name,
     })
 }
 
@@ -136,6 +142,35 @@ fn wait_for_ssh(ip: &str) -> Result<()> {
     }
 
     anyhow::bail!("Timed out waiting for SSH on {}", addr);
+}
+
+fn add_git_remote(
+    project_root: &std::path::Path,
+    username: &str,
+    hostname: &str,
+    project_name: &str,
+) -> Result<()> {
+    let remote_url = format!("{}@{}:~/{}/", username, hostname, project_name);
+
+    // Remove existing remote if present, ignore errors
+    let _ = Command::new("git")
+        .args(["remote", "remove", "gob"])
+        .current_dir(project_root)
+        .output();
+
+    let status = Command::new("git")
+        .args(["remote", "add", "gob", &remote_url])
+        .current_dir(project_root)
+        .status()
+        .context("Failed to run git")?;
+
+    if status.success() {
+        println!("  Git remote 'gob' added: {}", remote_url);
+    } else {
+        eprintln!("Warning: failed to add git remote 'gob'");
+    }
+
+    Ok(())
 }
 
 fn sync_project(

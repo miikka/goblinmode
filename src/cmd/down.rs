@@ -51,7 +51,13 @@ pub fn run() -> Result<()> {
         let _ = Command::new("ssh-keygen").args(["-R", host]).output();
     }
 
-    // 7. Remove state
+    // 7. Remove git remote
+    let _ = Command::new("git")
+        .args(["remote", "remove", "gob"])
+        .current_dir(&project.root)
+        .output();
+
+    // 8. Remove state
     state::delete_state(&project.id)?;
     println!("Done.");
     Ok(())
