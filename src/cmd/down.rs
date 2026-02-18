@@ -46,7 +46,12 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 6. Remove state
+    // 6. Remove from known_hosts
+    for host in [&hostname, &existing.ipv4] {
+        let _ = Command::new("ssh-keygen").args(["-R", host]).output();
+    }
+
+    // 7. Remove state
     state::delete_state(&project.id)?;
     println!("Done.");
     Ok(())
