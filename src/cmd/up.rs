@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, Write};
 use std::net::TcpStream;
+use std::process::Command;
 use std::time::Duration;
 
 use crate::config;
@@ -102,6 +103,9 @@ pub fn ensure_running() -> Result<Env> {
     // 8. Wait for SSH
     wait_for_ssh(&ip)?;
 
+    // 9. Push project to VM
+    sync_project(&project.root, &project.name, &username, &ip)?;
+
     Ok(Env {
         username,
         hostname: server_name,
@@ -132,6 +136,44 @@ fn wait_for_ssh(ip: &str) -> Result<()> {
     }
 
     anyhow::bail!("Timed out waiting for SSH on {}", addr);
+}
+
+fn sync_project(
+    project_root: &std::path::Path,
+    project_name: &str,
+    username: &str,
+    ip: &str,
+) -> Result<()> {
+    println!("Syncing project to VM...");
+
+    // Ensure source path ends with / so rsync copies contents, not the directory itself
+    let mut src = project_root.to_string_lossy().to_string();
+    if !src.ends_with('/') {
+        src.push('/');
+    }
+
+    let dest = format!("{}@{}:~/{}/", username, ip, project_name);
+    let status = Command::new("rsync")
+        .args([
+            "-az",
+            "--filter=:- .gitignore",
+            "-e",
+            "ssh -o StrictHostKeyChecking=accept-new",
+            &src,
+            &dest,
+        ])
+        .status()
+        .context("Failed to run rsync")?;
+
+    if !status.success() {
+        bail!(
+            "rsync failed with exit code {}",
+            status.code().unwrap_or(-1)
+        );
+    }
+
+    println!("  Project synced to ~/{}/", project_name);
+    Ok(())
 }
 
 fn build_cloud_init(username: &str, ssh_pubkey: &str, tailscale_auth_key: &str) -> String {
