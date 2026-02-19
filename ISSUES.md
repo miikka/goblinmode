@@ -8,6 +8,4 @@
 * There should be some way of automatically shutting down or pausing the VM so that forgotten VMs do not incur costs. This may need the deployment of separate watcher process.
 * `gob pause` is damn slow. Note: this needs a lot of thought.
 * `gob up` is damn slow. Note: this needs a lot of thought.
-* `reqwest` crate is out of date
-* `toml` crate is out of date`
 * `git-delta` needs to be added to the cloud-init package list
