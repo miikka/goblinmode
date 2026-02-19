@@ -36,3 +36,8 @@ There are no tests yet. Binary is `gob`.
 - Dotfiles setup and cloud-init wait only run on initial provisioning, not reconnect
 - State is saved immediately after server creation (before polling), so Ctrl-C doesn't orphan servers
 - Non-fatal operations (dotfiles, git remote) warn on failure instead of aborting
+
+## Issues and PRs
+
+- The project is hosted with Forgejo at https://forgejo.sargo-hamlet.ts.net/miikka/goblinmode/
+- You can use `fj` command-line tool to interact with Forgejo
