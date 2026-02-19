@@ -9,3 +9,4 @@
 * `gob pause` is damn slow. Note: this needs a lot of thought.
 * `gob up` is damn slow. Note: this needs a lot of thought.
 * `git-delta` needs to be added to the cloud-init package list
+* `gob up` results in a broken `jj` repo on the host. The rsync approach might be flawed - it could be better to create a git repo on the VM and git push there from the local machine.
