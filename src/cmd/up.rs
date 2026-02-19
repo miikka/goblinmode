@@ -508,7 +508,9 @@ runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh{rust_cmds}
+  - tailscale up --auth-key={tailscale_auth_key} --ssh
+  - su - {username} -c "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
+  - su - {username} -c "/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data jj-cli"{rust_cmds}
 "#
     )
 }
