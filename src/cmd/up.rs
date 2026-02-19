@@ -157,17 +157,19 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     // 10. Configure tailscale serve ports
     setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
 
-    // 11. Push project to VM
-    sync_project(&project.root, &project.name, &username, &ip)?;
+    // 11. Init git repo and push project to VM
+    init_vm_repo(&username, &ip, &project.name)?;
+    push_to_vm(&project.root, &username, &server_name, &ip, &project.name)?;
 
-    // 12. Setup dotfiles
+    // 12. Setup VM origin and SSH key
+    setup_vm_origin(&username, &ip, &project.root, &project.name);
+    setup_vm_ssh_key(&username, &ip);
+
+    // 13. Setup dotfiles
     if let Some(ref repo) = cfg.dotfiles_repo {
         let install_cmd = cfg.dotfiles_install.as_deref().unwrap_or("./install.sh");
         setup_dotfiles(&username, &ip, repo, install_cmd);
     }
-
-    // 13. Add git remote
-    add_git_remote(&project.root, &username, &server_name, &project.name)?;
 
     Ok(Env {
         username,
@@ -270,11 +272,9 @@ fn restore_from_snapshot(
     // Configure tailscale serve ports
     setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
 
-    // Sync project
-    sync_project(&project.root, &project.name, &username, &ip)?;
-
-    // Update git remote
-    add_git_remote(&project.root, &username, &server_name, &project.name)?;
+    // Push project and re-copy SSH key (repo and origin are in the snapshot)
+    push_to_vm(&project.root, &username, &server_name, &ip, &project.name)?;
+    setup_vm_ssh_key(&username, &ip);
 
     // Delete old snapshot
     print!("Cleaning up snapshot... ");
@@ -324,12 +324,47 @@ fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     anyhow::bail!("Timed out waiting for SSH on {}", ip);
 }
 
-fn add_git_remote(
+fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
+    println!("Initializing git repo on VM...");
+    let remote_cmd = format!(
+        "mkdir -p ~/{project_name} && cd ~/{project_name} && git init && git config receive.denyCurrentBranch updateInstead"
+    );
+    let output = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            &remote_cmd,
+        ])
+        .output()
+        .context("Failed to run ssh")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to init git repo on VM: {}", stderr.trim());
+    }
+    println!("  Git repo initialized at ~/{}/", project_name);
+    Ok(())
+}
+
+fn push_to_vm(
     project_root: &std::path::Path,
     username: &str,
     hostname: &str,
+    ip: &str,
     project_name: &str,
 ) -> Result<()> {
+    println!("Pushing project to VM...");
+
+    // Pre-check: ensure there are commits to push
+    let head_check = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to run git")?;
+    if !head_check.status.success() {
+        bail!("No commits in this repository. Make an initial commit before running `gob up`.");
+    }
+
     let remote_url = format!("{}@{}:~/{}/", username, hostname, project_name);
 
     // Remove existing remote if present, ignore errors
@@ -343,52 +378,195 @@ fn add_git_remote(
         .current_dir(project_root)
         .status()
         .context("Failed to run git")?;
-
-    if status.success() {
-        println!("  Git remote 'gob' added: {}", remote_url);
-    } else {
-        eprintln!("Warning: failed to add git remote 'gob'");
+    if !status.success() {
+        bail!("Failed to add git remote 'gob'");
     }
 
+    // Detect current branch
+    let branch_output = Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to run git")?;
+
+    let ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new";
+
+    let branch = if branch_output.status.success() {
+        String::from_utf8_lossy(&branch_output.stdout).trim().to_string()
+    } else {
+        "main".to_string()
+    };
+
+    let push_status = if branch_output.status.success() {
+        Command::new("git")
+            .args(["push", "gob", &branch])
+            .env("GIT_SSH_COMMAND", ssh_cmd)
+            .current_dir(project_root)
+            .status()
+            .context("Failed to run git push")?
+    } else {
+        // Detached HEAD — push as main
+        Command::new("git")
+            .args(["push", "gob", "HEAD:refs/heads/main"])
+            .env("GIT_SSH_COMMAND", ssh_cmd)
+            .current_dir(project_root)
+            .status()
+            .context("Failed to run git push")?
+    };
+
+    if !push_status.success() {
+        bail!("git push to VM failed");
+    }
+
+    // Checkout the pushed branch on the VM
+    let checkout_output = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            &format!("cd ~/{} && git checkout {}", project_name, branch),
+        ])
+        .output()
+        .context("Failed to checkout branch on VM")?;
+    if !checkout_output.status.success() {
+        let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+        bail!("Failed to checkout branch '{}' on VM: {}", branch, stderr.trim());
+    }
+
+    println!("  Project pushed to {}", remote_url);
     Ok(())
 }
 
-fn sync_project(
-    project_root: &std::path::Path,
-    project_name: &str,
+fn setup_vm_origin(
     username: &str,
     ip: &str,
-) -> Result<()> {
-    println!("Syncing project to VM...");
+    project_root: &std::path::Path,
+    project_name: &str,
+) {
+    // Get local origin URL
+    let origin_output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(project_root)
+        .output();
 
-    // Ensure source path ends with / so rsync copies contents, not the directory itself
-    let mut src = project_root.to_string_lossy().to_string();
-    if !src.ends_with('/') {
-        src.push('/');
-    }
+    let origin_url = match origin_output {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => {
+            eprintln!("Warning: no 'origin' remote found locally, skipping VM origin setup");
+            return;
+        }
+    };
 
-    let dest = format!("{}@{}:~/{}/", username, ip, project_name);
-    let status = Command::new("rsync")
+    let remote_cmd = format!(
+        "cd ~/{project_name} && git remote remove origin 2>/dev/null; git remote add origin {origin_url}"
+    );
+    let result = Command::new("ssh")
         .args([
-            "-az",
-            "--filter=:- .gitignore",
-            "-e",
-            "ssh -o StrictHostKeyChecking=accept-new",
-            &src,
-            &dest,
+            "-o", "StrictHostKeyChecking=accept-new",
+            &format!("{}@{}", username, ip),
+            &remote_cmd,
         ])
-        .status()
-        .context("Failed to run rsync")?;
+        .status();
 
-    if !status.success() {
-        bail!(
-            "rsync failed with exit code {}",
-            status.code().unwrap_or(-1)
-        );
+    match result {
+        Ok(s) if s.success() => println!("  VM origin set to {}", origin_url),
+        Ok(_) => eprintln!("Warning: failed to set origin remote on VM"),
+        Err(e) => eprintln!("Warning: failed to set origin remote on VM: {}", e),
+    }
+}
+
+fn setup_vm_ssh_key(username: &str, ip: &str) {
+    println!("Setting up SSH key on VM...");
+
+    let data_dir = match dirs::data_dir() {
+        Some(d) => d,
+        None => {
+            eprintln!("Warning: could not determine data directory, skipping VM SSH key setup");
+            return;
+        }
+    };
+
+    let key_dir = data_dir.join("goblinmode");
+    if let Err(e) = fs::create_dir_all(&key_dir) {
+        eprintln!("Warning: failed to create key directory: {}", e);
+        return;
     }
 
-    println!("  Project synced to ~/{}/", project_name);
-    Ok(())
+    let private_key_path = key_dir.join("vm_id_ed25519");
+    let public_key_path = key_dir.join("vm_id_ed25519.pub");
+
+    // Generate key pair if it doesn't exist
+    if !private_key_path.exists() {
+        println!("  Generating VM SSH key...");
+        let status = Command::new("ssh-keygen")
+            .args([
+                "-t", "ed25519",
+                "-f", &private_key_path.to_string_lossy(),
+                "-N", "",
+                "-C", "goblinmode-vm",
+            ])
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                eprintln!("Warning: ssh-keygen failed, skipping VM SSH key setup");
+                return;
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to run ssh-keygen: {}", e);
+                return;
+            }
+        }
+    }
+
+    let target = format!("{}@{}", username, ip);
+
+    // SCP private and public key to VM
+    let scp_result = Command::new("scp")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &private_key_path.to_string_lossy(),
+            &format!("{}:~/.ssh/id_ed25519", target),
+        ])
+        .status();
+    if !matches!(scp_result, Ok(s) if s.success()) {
+        eprintln!("Warning: failed to copy SSH private key to VM");
+        return;
+    }
+
+    let scp_result = Command::new("scp")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &public_key_path.to_string_lossy(),
+            &format!("{}:~/.ssh/id_ed25519.pub", target),
+        ])
+        .status();
+    if !matches!(scp_result, Ok(s) if s.success()) {
+        eprintln!("Warning: failed to copy SSH public key to VM");
+        return;
+    }
+
+    // Fix permissions and configure SSH on VM
+    let ssh_config = r#"Host github.com gitlab.com
+    StrictHostKeyChecking accept-new"#;
+    let remote_cmd = format!(
+        "chmod 600 ~/.ssh/id_ed25519 && echo '{}' >> ~/.ssh/config && chmod 600 ~/.ssh/config",
+        ssh_config
+    );
+    let _ = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            &target,
+            &remote_cmd,
+        ])
+        .status();
+
+    // Print public key for user
+    if let Ok(pubkey) = fs::read_to_string(&public_key_path) {
+        println!("  VM SSH public key (add to GitHub/GitLab if not already done):");
+        println!("  {}", pubkey.trim());
+    }
 }
 
 fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
