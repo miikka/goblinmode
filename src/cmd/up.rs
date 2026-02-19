@@ -108,6 +108,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         ssh_pubkey.trim(),
         &cfg.tailscale_auth_key,
         is_rust,
+        &cfg.vm_packages,
     );
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}' (type: {})...", server_name, project_config.server_type);
@@ -689,6 +690,7 @@ fn build_cloud_init(
     ssh_pubkey: &str,
     tailscale_auth_key: &str,
     is_rust: bool,
+    vm_packages: &[String],
 ) -> String {
     let extra_packages = if is_rust {
         "\n  - build-essential\n  - rustup"
@@ -704,6 +706,10 @@ fn build_cloud_init(
         Some(tz) => format!("\ntimezone: {tz}"),
         None => String::new(),
     };
+    let configurable_packages: String = vm_packages
+        .iter()
+        .map(|p| format!("\n  - {p}"))
+        .collect();
     format!(
         r#"#cloud-config{timezone_line}
 users:
@@ -722,9 +728,7 @@ packages:
   - zsh
   - tmux
   - mosh
-  - atuin
-  - starship
-  - just{extra_packages}
+  - just{configurable_packages}{extra_packages}
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config

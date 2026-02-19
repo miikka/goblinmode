@@ -8,13 +8,24 @@ pub struct Config {
     pub tailscale_api_key: String,
     pub dotfiles_repo: Option<String>,
     pub dotfiles_install: Option<String>,
+    pub vm_packages: Vec<String>,
 }
+
+/// Default extra packages installed on the VM (on top of core packages).
+/// Users can override this list via `[vm] packages = [...]` in config.toml.
+const DEFAULT_VM_PACKAGES: &[&str] = &["atuin", "starship", "git-delta"];
 
 #[derive(Deserialize)]
 struct ConfigFile {
     hetzner: Option<HetznerConfig>,
     tailscale: Option<TailscaleConfig>,
     dotfiles: Option<DotfilesConfig>,
+    vm: Option<VmConfig>,
+}
+
+#[derive(Deserialize)]
+struct VmConfig {
+    packages: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -101,12 +112,19 @@ pub fn load_config() -> Result<Config> {
         .and_then(|d| d.install.clone())
         .filter(|v| !v.is_empty());
 
+    let vm_packages = config_file
+        .as_ref()
+        .and_then(|c| c.vm.as_ref())
+        .and_then(|v| v.packages.clone())
+        .unwrap_or_else(|| DEFAULT_VM_PACKAGES.iter().map(|s| s.to_string()).collect());
+
     Ok(Config {
         hetzner_api_token,
         tailscale_auth_key,
         tailscale_api_key,
         dotfiles_repo,
         dotfiles_install,
+        vm_packages,
     })
 }
 
