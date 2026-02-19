@@ -28,12 +28,15 @@ pub fn ensure_running() -> Result<Env> {
     let cfg = config::load_config()?;
     let client = HetznerClient::new(cfg.hetzner_api_token.clone());
 
-    // 3. Check existing state
+    // 3. Load project config
+    let project_config = project_config::load_project_config(&project.root)?;
+
+    // 4. Check existing state
     if let Some(existing) = state::load_state(&project.id)? {
-        // 3a. Check for snapshot restore
+        // 4a. Check for snapshot restore
         if let Some(snapshot_id) = existing.snapshot_id {
             return restore_from_snapshot(
-                &project, &cfg, &client, snapshot_id, &existing,
+                &project, &cfg, &client, snapshot_id, &existing, &project_config,
             );
         }
 
@@ -48,7 +51,6 @@ pub fn ensure_running() -> Result<Env> {
                 Some((status, ip)) if status == "running" => {
                     println!("running");
                     wait_for_ssh(&existing.username, &ip)?;
-                    let project_config = project_config::load_project_config(&project.root)?;
                     setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
                     let hostname = if existing.hostname.is_empty() {
                         format!("gob-{}", project.name)
@@ -76,7 +78,7 @@ pub fn ensure_running() -> Result<Env> {
         }
     }
 
-    // 4. Read SSH public key
+    // 5. Read SSH public key
     let ssh_key_path = dirs::home_dir()
         .context("Could not determine home directory")?
         .join(".ssh")
@@ -88,11 +90,11 @@ pub fn ensure_running() -> Result<Env> {
         )
     })?;
 
-    // 4b. Ensure goblinmode SSH key exists and is uploaded to Hetzner
+    // 5b. Ensure goblinmode SSH key exists and is uploaded to Hetzner
     let goblin_pubkey = ensure_goblin_ssh_key()?;
     let hetzner_key_id = client.ensure_ssh_key("goblinmode", &goblin_pubkey)?;
 
-    // 5. Create server with cloud-init
+    // 6. Create server with cloud-init
     let username = whoami();
     let is_rust = project.root.join("Cargo.toml").exists();
     let user_data = build_cloud_init(
@@ -102,10 +104,10 @@ pub fn ensure_running() -> Result<Env> {
         is_rust,
     );
     let server_name = format!("gob-{}", project.name);
-    println!("Creating server '{}'...", server_name);
+    println!("Creating server '{}' (type: {})...", server_name, project_config.server_type);
     let (server_id, initial_ip) = client.create_server(
         &server_name,
-        "cx23",
+        &project_config.server_type,
         "debian-13",
         "hel1",
         Some(&user_data),
@@ -147,7 +149,6 @@ pub fn ensure_running() -> Result<Env> {
     wait_for_cloud_init(&username, &ip)?;
 
     // 10. Configure tailscale serve ports
-    let project_config = project_config::load_project_config(&project.root)?;
     setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
 
     // 11. Push project to VM
@@ -181,6 +182,7 @@ fn restore_from_snapshot(
     client: &HetznerClient,
     snapshot_id: u64,
     existing: &state::ProjectState,
+    project_config: &project_config::ProjectConfig,
 ) -> Result<Env> {
     println!("Restoring from snapshot (image: {})...", snapshot_id);
 
@@ -200,9 +202,10 @@ fn restore_from_snapshot(
     let hetzner_key_id = client.ensure_ssh_key("goblinmode", &goblin_pubkey)?;
 
     // Create server from snapshot (no cloud-init needed)
+    println!("  Server type: {}", project_config.server_type);
     let (server_id, initial_ip) = client.create_server(
         &server_name,
-        "cx23",
+        &project_config.server_type,
         &snapshot_id.to_string(),
         "hel1",
         None,
@@ -259,7 +262,6 @@ fn restore_from_snapshot(
     }
 
     // Configure tailscale serve ports
-    let project_config = project_config::load_project_config(&project.root)?;
     setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
 
     // Sync project

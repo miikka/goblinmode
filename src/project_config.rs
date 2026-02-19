@@ -2,10 +2,25 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Default)]
+fn default_server_type() -> String {
+    "cx23".to_string()
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ProjectConfig {
     #[serde(default)]
     pub serve_ports: Vec<u16>,
+    #[serde(default = "default_server_type")]
+    pub server_type: String,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        ProjectConfig {
+            serve_ports: Vec::new(),
+            server_type: default_server_type(),
+        }
+    }
 }
 
 pub fn load_project_config(project_root: &Path) -> Result<ProjectConfig> {

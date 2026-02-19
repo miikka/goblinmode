@@ -10,5 +10,5 @@
 * `gob up` is damn slow. Note: this needs a lot of thought.
 * `reqwest` crate is out of date
 * `toml` crate is out of date`
-* The server type should be configurable - put it into the repo config!
 * `gob up` should have `--reset` flag that destroys the VM if one is running and recreates it.
+* `git-delta` needs to be added to the cloud-init package list
