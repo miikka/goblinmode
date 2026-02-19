@@ -11,10 +11,6 @@ pub struct Config {
     pub vm_packages: Vec<String>,
 }
 
-/// Default extra packages installed on the VM (on top of core packages).
-/// Users can override this list via `[vm] packages = [...]` in config.toml.
-const DEFAULT_VM_PACKAGES: &[&str] = &["atuin", "starship", "git-delta"];
-
 #[derive(Deserialize)]
 struct ConfigFile {
     hetzner: Option<HetznerConfig>,
@@ -116,7 +112,7 @@ pub fn load_config() -> Result<Config> {
         .as_ref()
         .and_then(|c| c.vm.as_ref())
         .and_then(|v| v.packages.clone())
-        .unwrap_or_else(|| DEFAULT_VM_PACKAGES.iter().map(|s| s.to_string()).collect());
+        .unwrap_or_default();
 
     Ok(Config {
         hetzner_api_token,
