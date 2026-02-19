@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const BASE_URL: &str = "https://api.hetzner.cloud/v1";
 
@@ -15,8 +16,14 @@ struct ServerResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct ServersResponse {
+    servers: Vec<Server>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Server {
     id: u64,
+    name: String,
     status: String,
     public_net: PublicNet,
 }
@@ -37,6 +44,7 @@ struct CreateServerRequest {
     server_type: String,
     image: String,
     location: String,
+    labels: HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     user_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,11 +106,14 @@ impl HetznerClient {
         user_data: Option<&str>,
         ssh_keys: Option<Vec<u64>>,
     ) -> Result<(u64, String)> {
+        let mut labels = HashMap::new();
+        labels.insert("managed-by".to_string(), "goblinmode".to_string());
         let req = CreateServerRequest {
             name: name.to_string(),
             server_type: server_type.to_string(),
             image: image.to_string(),
             location: location.to_string(),
+            labels,
             user_data: user_data.map(|s| s.to_string()),
             ssh_keys,
         };
@@ -237,7 +248,10 @@ impl HetznerClient {
             &format!("/servers/{}/actions/create_image", server_id),
             &serde_json::json!({
                 "description": description,
-                "type": "snapshot"
+                "type": "snapshot",
+                "labels": {
+                    "managed-by": "goblinmode"
+                }
             }),
         )?;
         if !resp.status().is_success() && resp.status().as_u16() != 201 {
@@ -270,6 +284,28 @@ impl HetznerClient {
         }
     }
 
+    /// List all snapshots with the managed-by=goblinmode label.
+    pub fn list_goblinmode_snapshots(&self) -> Result<Vec<SnapshotInfo>> {
+        let resp = self.get("/images?type=snapshot&label_selector=managed-by%3Dgoblinmode")?;
+        if !resp.status().is_success() {
+            bail!("Failed to list images: {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().context("Failed to parse images response")?;
+        let images = body["images"]
+            .as_array()
+            .context("Missing images array")?;
+        let mut result = Vec::new();
+        for img in images {
+            let id = img["id"].as_u64().unwrap_or(0);
+            let description = img["description"].as_str().unwrap_or("").to_string();
+            let created = img["created"].as_str().unwrap_or("").to_string();
+            if id != 0 {
+                result.push(SnapshotInfo { id, description, created });
+            }
+        }
+        Ok(result)
+    }
+
     /// Delete an image/snapshot.
     pub fn delete_image(&self, image_id: u64) -> Result<()> {
         let resp = self
@@ -284,6 +320,25 @@ impl HetznerClient {
             bail!("Failed to delete image ({}): {}", status, body);
         }
         Ok(())
+    }
+
+    /// List all servers with the managed-by=goblinmode label.
+    pub fn list_goblinmode_servers(&self) -> Result<Vec<ServerInfo>> {
+        let resp = self.get("/servers?label_selector=managed-by%3Dgoblinmode")?;
+        if !resp.status().is_success() {
+            bail!("Failed to list servers: {}", resp.status());
+        }
+        let body: ServersResponse = resp.json().context("Failed to parse servers response")?;
+        Ok(body
+            .servers
+            .into_iter()
+            .map(|s| ServerInfo {
+                id: s.id,
+                name: s.name,
+                status: s.status,
+                ipv4: s.public_net.ipv4.ip,
+            })
+            .collect())
     }
 
     /// Check if a server still exists and is running.
@@ -301,4 +356,17 @@ impl HetznerClient {
             server.server.public_net.ipv4.ip,
         )))
     }
+}
+
+pub struct ServerInfo {
+    pub id: u64,
+    pub name: String,
+    pub status: String,
+    pub ipv4: String,
+}
+
+pub struct SnapshotInfo {
+    pub id: u64,
+    pub description: String,
+    pub created: String,
 }

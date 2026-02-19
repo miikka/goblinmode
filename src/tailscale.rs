@@ -33,7 +33,7 @@ impl TailscaleClient {
         let device_id = self.find_device_by_hostname(hostname)?;
         match device_id {
             Some(id) => {
-                self.delete_device(&id)?;
+                self.delete_device_by_id(&id)?;
                 println!("Tailscale device '{}' deleted.", hostname);
             }
             None => {
@@ -46,7 +46,20 @@ impl TailscaleClient {
         Ok(())
     }
 
-    fn find_device_by_hostname(&self, hostname: &str) -> Result<Option<String>> {
+    /// List all devices whose hostname starts with "gob-".
+    pub fn list_gob_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let devices = self.list_devices()?;
+        Ok(devices
+            .into_iter()
+            .filter(|d| d.hostname.starts_with("gob-"))
+            .map(|d| DeviceInfo {
+                id: d.id,
+                hostname: d.hostname,
+            })
+            .collect())
+    }
+
+    fn list_devices(&self) -> Result<Vec<Device>> {
         let resp = self
             .client
             .get(format!("{}/tailnet/-/devices", BASE_URL))
@@ -64,14 +77,18 @@ impl TailscaleClient {
             .json()
             .context("Failed to parse Tailscale devices response")?;
 
+        Ok(devices.devices)
+    }
+
+    fn find_device_by_hostname(&self, hostname: &str) -> Result<Option<String>> {
+        let devices = self.list_devices()?;
         Ok(devices
-            .devices
             .into_iter()
             .find(|d| d.hostname == hostname)
             .map(|d| d.id))
     }
 
-    fn delete_device(&self, device_id: &str) -> Result<()> {
+    pub fn delete_device_by_id(&self, device_id: &str) -> Result<()> {
         let resp = self
             .client
             .delete(format!("{}/device/{}", BASE_URL, device_id))
@@ -87,4 +104,9 @@ impl TailscaleClient {
 
         Ok(())
     }
+}
+
+pub struct DeviceInfo {
+    pub id: String,
+    pub hostname: String,
 }

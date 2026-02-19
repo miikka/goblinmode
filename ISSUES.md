@@ -7,6 +7,5 @@
 * There should be a way to shutdown the server with a snapshot and restore it later. Like `down` but not destroying everything.
 * One of the coding agents - maybe Claude Code or OpenCode - should be set up on the VM.
 * There should be some way of automatically shutting down or pausing the VM so that forgotten VMs do not incur costs. This may need the deployment of separate watcher process.
-* There should be an explicit `gob prune` command that looks at the VMs running on Hetzner and shuts them down (possibly make use of Hetzner's labels feature to identify them)
-* If you press Ctrl-C while waiting the server to be created when running `gob up`, `gob ps` and `gob down` will think that there's no server even though that's not true.
-* `gob pause` is damn slow
+* `gob pause` is damn slow.
+* `gob up` is damn slow.

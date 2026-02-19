@@ -30,6 +30,8 @@ enum Commands {
     /// Show the status of the development VM
     #[command(alias = "ps")]
     Status,
+    /// Delete all goblinmode servers on Hetzner
+    Prune,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,5 +44,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Mosh => cmd::mosh::run(),
         Commands::Zed => cmd::zed::run(),
         Commands::Status => cmd::status::run(),
+        Commands::Prune => cmd::prune::run(),
     }
 }

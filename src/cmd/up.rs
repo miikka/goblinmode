@@ -103,7 +103,7 @@ pub fn ensure_running() -> Result<Env> {
     );
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}'...", server_name);
-    let (server_id, _ip) = client.create_server(
+    let (server_id, initial_ip) = client.create_server(
         &server_name,
         "cx23",
         "debian-13",
@@ -116,11 +116,21 @@ pub fn ensure_running() -> Result<Env> {
         server_id
     );
 
-    // 6. Poll until running
+    // 6. Save state immediately so Ctrl-C doesn't orphan the server
+    let project_state = state::ProjectState {
+        server_id,
+        ipv4: initial_ip,
+        username: username.clone(),
+        hostname: server_name.clone(),
+        snapshot_id: None,
+    };
+    state::save_state(&project.id, &project_state)?;
+
+    // 7. Poll until running
     let ip = client.wait_for_server(server_id)?;
     println!("  Server running at {}", ip);
 
-    // 7. Save state
+    // Update state with final IP
     let project_state = state::ProjectState {
         server_id,
         ipv4: ip.clone(),
@@ -190,7 +200,7 @@ fn restore_from_snapshot(
     let hetzner_key_id = client.ensure_ssh_key("goblinmode", &goblin_pubkey)?;
 
     // Create server from snapshot (no cloud-init needed)
-    let (server_id, _ip) = client.create_server(
+    let (server_id, initial_ip) = client.create_server(
         &server_name,
         "cx23",
         &snapshot_id.to_string(),
@@ -200,10 +210,20 @@ fn restore_from_snapshot(
     )?;
     println!("  Server created (id: {}), waiting for it to start...", server_id);
 
+    // Save state immediately so Ctrl-C doesn't orphan the server
+    let project_state = state::ProjectState {
+        server_id,
+        ipv4: initial_ip,
+        username: username.clone(),
+        hostname: server_name.clone(),
+        snapshot_id: None,
+    };
+    state::save_state(&project.id, &project_state)?;
+
     let ip = client.wait_for_server(server_id)?;
     println!("  Server running at {}", ip);
 
-    // Save state immediately
+    // Update state with final IP
     let project_state = state::ProjectState {
         server_id,
         ipv4: ip.clone(),
