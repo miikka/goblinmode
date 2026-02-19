@@ -474,6 +474,36 @@ fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
     }
 }
 
+fn detect_timezone() -> Option<String> {
+    // 1. Honour explicit TZ env var
+    if let Ok(tz) = std::env::var("TZ") {
+        if !tz.is_empty() {
+            return Some(tz);
+        }
+    }
+
+    // 2. Resolve /etc/localtime symlink and strip the zoneinfo prefix
+    if let Ok(target) = std::fs::read_link("/etc/localtime") {
+        let s = target.to_string_lossy();
+        if let Some(pos) = s.find("/zoneinfo/") {
+            let tz = &s[pos + "/zoneinfo/".len()..];
+            if !tz.is_empty() {
+                return Some(tz.to_string());
+            }
+        }
+    }
+
+    // 3. Fall back to /etc/timezone (plain text, e.g. "Europe/Helsinki\n")
+    if let Ok(contents) = std::fs::read_to_string("/etc/timezone") {
+        let tz = contents.trim().to_string();
+        if !tz.is_empty() {
+            return Some(tz);
+        }
+    }
+
+    None
+}
+
 fn build_cloud_init(
     username: &str,
     ssh_pubkey: &str,
@@ -490,8 +520,12 @@ fn build_cloud_init(
     } else {
         String::new()
     };
+    let timezone_line = match detect_timezone() {
+        Some(tz) => format!("\ntimezone: {tz}"),
+        None => String::new(),
+    };
     format!(
-        r#"#cloud-config
+        r#"#cloud-config{timezone_line}
 users:
   - name: {username}
     sudo: ALL=(ALL) NOPASSWD:ALL
