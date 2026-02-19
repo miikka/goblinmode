@@ -3,9 +3,12 @@
 * The Hetzner API key and Tailscale auth keys are in config.toml. They should be in a password manager.
 * It should be investigated if the server can be run with IPv6 connectivity only.
 * There are no tests for anything.
-* `jj` is not installed on the VM
+* `jj` is not installed on the VM. Probably the way to go is to install `cargo-binstall` and then use that.
 * There should be a way to shutdown the server with a snapshot and restore it later. Like `down` but not destroying everything.
 * One of the coding agents - maybe Claude Code or OpenCode - should be set up on the VM.
 * There should be some way of automatically shutting down or pausing the VM so that forgotten VMs do not incur costs. This may need the deployment of separate watcher process.
 * `gob pause` is damn slow.
 * `gob up` is damn slow.
+* `reqwest` crate is out of date
+* `toml` crate is out of date`
+* The server type should be configurable - put it into the repo config!
