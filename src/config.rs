@@ -4,8 +4,9 @@ use std::fs;
 
 pub struct Config {
     pub hetzner_api_token: String,
-    pub tailscale_auth_key: String,
+    pub tailscale_auth_key: Option<String>,
     pub tailscale_api_key: String,
+    pub tailscale_tags: Vec<String>,
     pub dotfiles_repo: Option<String>,
     pub dotfiles_install: Option<String>,
     pub vm_packages: Vec<String>,
@@ -39,10 +40,13 @@ struct HetznerConfig {
 struct TailscaleConfig {
     auth_key: Option<String>,
     api_key: Option<String>,
+    tags: Option<Vec<String>>,
 }
 
 pub fn load_config() -> Result<Config> {
-    let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+    let config_dir = dirs::home_dir()
+        .context("Could not determine home directory")?
+        .join(".config");
     let config_path = config_dir.join("goblinmode").join("config.toml");
 
     let config_file: Option<ConfigFile> = if config_path.exists() {
@@ -92,13 +96,13 @@ pub fn load_config() -> Result<Config> {
             .as_ref()
             .and_then(|c| c.tailscale.as_ref())
             .and_then(|t| t.auth_key.as_deref()),
-    )
-    .context(format!(
-        "Tailscale auth key not found.\n\
-         Set TAILSCALE_AUTH_KEY env var or add to {config_path_display}:\n\n\
-         [tailscale]\n\
-         auth_key = \"tskey-auth-...\""
-    ))?;
+    );
+
+    let tailscale_tags = config_file
+        .as_ref()
+        .and_then(|c| c.tailscale.as_ref())
+        .and_then(|t| t.tags.clone())
+        .unwrap_or_default();
 
     let dotfiles = config_file.as_ref().and_then(|c| c.dotfiles.as_ref());
     let dotfiles_repo = dotfiles
@@ -118,6 +122,7 @@ pub fn load_config() -> Result<Config> {
         hetzner_api_token,
         tailscale_auth_key,
         tailscale_api_key,
+        tailscale_tags,
         dotfiles_repo,
         dotfiles_install,
         vm_packages,
