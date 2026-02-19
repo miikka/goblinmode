@@ -494,21 +494,8 @@ fn detect_timezone() -> Option<String> {
         }
     }
 
-    // 3. macOS fallback: `systemsetup -gettimezone` (output: "Time Zone: America/New_York")
-    #[cfg(target_os = "macos")]
-    if let Ok(output) = Command::new("systemsetup").args(["-gettimezone"]).output() {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout);
-            if let Some(tz) = s.trim().strip_prefix("Time Zone: ") {
-                if !tz.is_empty() {
-                    return Some(tz.to_string());
-                }
-            }
-        }
-    }
-
-    // 4. Linux fallback: /etc/timezone plain-text file (e.g. "Europe/Helsinki\n")
-    #[cfg(not(target_os = "macos"))]
+    // 3. Linux fallback: /etc/timezone plain-text file (e.g. "Europe/Helsinki\n")
+    // (Not present on macOS, but harmless to try.)
     if let Ok(contents) = std::fs::read_to_string("/etc/timezone") {
         let tz = contents.trim().to_string();
         if !tz.is_empty() {
