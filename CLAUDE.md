@@ -41,3 +41,4 @@ There are no tests yet. Binary is `gob`.
 
 - The project is hosted with Forgejo at https://forgejo.sargo-hamlet.ts.net/miikka/goblinmode/
 - You can use `fj` command-line tool to interact with Forgejo
+- When you start working on an issue, assign it to yourself.
