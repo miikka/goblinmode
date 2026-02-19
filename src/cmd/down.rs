@@ -21,19 +21,29 @@ pub fn run() -> Result<()> {
     // 3. Load config
     let cfg = config::load_config()?;
 
-    // 4. Remove from Tailscale
+    teardown(&project, &existing, &cfg)
+}
+
+/// Destroy all resources for a project. Does not bail if the server is already gone.
+pub fn teardown(
+    project: &project::Project,
+    existing: &state::ProjectState,
+    cfg: &config::Config,
+) -> Result<()> {
     let hostname = if existing.hostname.is_empty() {
         format!("gob-{}", project.name)
     } else {
-        existing.hostname
+        existing.hostname.clone()
     };
-    let ts_client = TailscaleClient::new(cfg.tailscale_api_key);
+
+    // Remove from Tailscale
+    let ts_client = TailscaleClient::new(cfg.tailscale_api_key.clone());
     if let Err(e) = ts_client.delete_device_by_hostname(&hostname) {
         eprintln!("Warning: failed to remove Tailscale device: {}", e);
     }
 
-    // 5. Delete Hetzner server
-    let hetzner_client = HetznerClient::new(cfg.hetzner_api_token);
+    // Delete Hetzner server
+    let hetzner_client = HetznerClient::new(cfg.hetzner_api_token.clone());
     if existing.server_id != 0 {
         println!(
             "Deleting server {} (id: {})...",
@@ -48,7 +58,7 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 5b. Delete snapshot if present
+    // Delete snapshot if present
     if let Some(snapshot_id) = existing.snapshot_id {
         print!("Deleting snapshot (image: {})... ", snapshot_id);
         match hetzner_client.delete_image(snapshot_id) {
@@ -57,18 +67,18 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 6. Remove from known_hosts
+    // Remove from known_hosts
     for host in [&hostname, &existing.ipv4] {
         let _ = Command::new("ssh-keygen").args(["-R", host]).output();
     }
 
-    // 7. Remove git remote
+    // Remove git remote
     let _ = Command::new("git")
         .args(["remote", "remove", "gob"])
         .current_dir(&project.root)
         .output();
 
-    // 8. Remove state
+    // Remove state
     state::delete_state(&project.id)?;
     println!("Done.");
     Ok(())

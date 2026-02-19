@@ -18,7 +18,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start a development VM for the current project
-    Up,
+    Up {
+        /// Destroy the existing VM and recreate it from scratch
+        #[arg(long)]
+        reset: bool,
+    },
     /// Destroy the development VM for the current project
     Down,
     /// Connect to the development VM with mosh
@@ -38,7 +42,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Up => cmd::up::run(),
+        Commands::Up { reset } => cmd::up::run(reset),
         Commands::Down => cmd::down::run(),
         Commands::Pause => cmd::pause::run(),
         Commands::Mosh => cmd::mosh::run(),

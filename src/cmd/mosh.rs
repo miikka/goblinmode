@@ -4,7 +4,7 @@ use std::process::Command;
 use super::up;
 
 pub fn run() -> Result<()> {
-    let env = up::ensure_running()?;
+    let env = up::ensure_running(false)?;
 
     let target = format!("{}@{}", env.username, env.hostname);
     println!("Connecting with mosh to {}...", target);

@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
 
+use crate::cmd::down;
 use crate::config;
 use crate::hetzner::HetznerClient;
 use crate::project;
@@ -19,7 +20,7 @@ pub struct Env {
 
 /// Ensure the dev environment is running, provisioning if needed.
 /// Returns connection info.
-pub fn ensure_running() -> Result<Env> {
+pub fn ensure_running(reset: bool) -> Result<Env> {
     // 1. Detect project root
     let project = project::detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
@@ -33,46 +34,51 @@ pub fn ensure_running() -> Result<Env> {
 
     // 4. Check existing state
     if let Some(existing) = state::load_state(&project.id)? {
-        // 4a. Check for snapshot restore
-        if let Some(snapshot_id) = existing.snapshot_id {
-            return restore_from_snapshot(
-                &project, &cfg, &client, snapshot_id, &existing, &project_config,
-            );
-        }
+        if reset {
+            println!("--reset: destroying existing VM...");
+            down::teardown(&project, &existing, &cfg)?;
+        } else {
+            // 4a. Check for snapshot restore
+            if let Some(snapshot_id) = existing.snapshot_id {
+                return restore_from_snapshot(
+                    &project, &cfg, &client, snapshot_id, &existing, &project_config,
+                );
+            }
 
-        if existing.server_id != 0 {
-            print!(
-                "Existing server found (id: {}), checking status... ",
-                existing.server_id
-            );
-            io::stdout().flush()?;
+            if existing.server_id != 0 {
+                print!(
+                    "Existing server found (id: {}), checking status... ",
+                    existing.server_id
+                );
+                io::stdout().flush()?;
 
-            match client.get_server_status(existing.server_id)? {
-                Some((status, ip)) if status == "running" => {
-                    println!("running");
-                    wait_for_ssh(&existing.username, &ip)?;
-                    setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
-                    let hostname = if existing.hostname.is_empty() {
-                        format!("gob-{}", project.name)
-                    } else {
-                        existing.hostname
-                    };
-                    return Ok(Env {
-                        username: existing.username,
-                        hostname,
-                        project_name: project.name,
-                    });
-                }
-                Some((status, _)) => {
-                    println!("{}", status);
-                    println!(
-                        "Server is not running (status: {}). Creating a new one.",
-                        status
-                    );
-                }
-                None => {
-                    println!("not found");
-                    println!("Server no longer exists. Creating a new one.");
+                match client.get_server_status(existing.server_id)? {
+                    Some((status, ip)) if status == "running" => {
+                        println!("running");
+                        wait_for_ssh(&existing.username, &ip)?;
+                        setup_tailscale_serve(&existing.username, &ip, &project_config.serve_ports);
+                        let hostname = if existing.hostname.is_empty() {
+                            format!("gob-{}", project.name)
+                        } else {
+                            existing.hostname
+                        };
+                        return Ok(Env {
+                            username: existing.username,
+                            hostname,
+                            project_name: project.name,
+                        });
+                    }
+                    Some((status, _)) => {
+                        println!("{}", status);
+                        println!(
+                            "Server is not running (status: {}). Creating a new one.",
+                            status
+                        );
+                    }
+                    None => {
+                        println!("not found");
+                        println!("Server no longer exists. Creating a new one.");
+                    }
                 }
             }
         }
@@ -170,8 +176,8 @@ pub fn ensure_running() -> Result<Env> {
     })
 }
 
-pub fn run() -> Result<()> {
-    let env = ensure_running()?;
+pub fn run(reset: bool) -> Result<()> {
+    let env = ensure_running(reset)?;
     println!("SSH ready: ssh {}@{}", env.username, env.hostname);
     Ok(())
 }
