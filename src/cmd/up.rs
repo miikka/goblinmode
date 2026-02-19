@@ -482,7 +482,8 @@ fn detect_timezone() -> Option<String> {
         }
     }
 
-    // 2. Resolve /etc/localtime symlink and strip the zoneinfo prefix
+    // 2. Resolve /etc/localtime symlink and strip the zoneinfo prefix.
+    // Works on Linux (/usr/share/zoneinfo/…) and macOS (/var/db/timezone/zoneinfo/…).
     if let Ok(target) = std::fs::read_link("/etc/localtime") {
         let s = target.to_string_lossy();
         if let Some(pos) = s.find("/zoneinfo/") {
@@ -493,7 +494,21 @@ fn detect_timezone() -> Option<String> {
         }
     }
 
-    // 3. Fall back to /etc/timezone (plain text, e.g. "Europe/Helsinki\n")
+    // 3. macOS fallback: `systemsetup -gettimezone` (output: "Time Zone: America/New_York")
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = Command::new("systemsetup").args(["-gettimezone"]).output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            if let Some(tz) = s.trim().strip_prefix("Time Zone: ") {
+                if !tz.is_empty() {
+                    return Some(tz.to_string());
+                }
+            }
+        }
+    }
+
+    // 4. Linux fallback: /etc/timezone plain-text file (e.g. "Europe/Helsinki\n")
+    #[cfg(not(target_os = "macos"))]
     if let Ok(contents) = std::fs::read_to_string("/etc/timezone") {
         let tz = contents.trim().to_string();
         if !tz.is_empty() {
