@@ -700,7 +700,7 @@ fn detect_timezone() -> Option<String> {
     None
 }
 
-fn build_cloud_init(
+pub(crate) fn build_cloud_init(
     username: &str,
     ssh_pubkey: &str,
     tailscale_auth_key: &str,
@@ -779,7 +779,7 @@ runcmd:
     )
 }
 
-fn whoami() -> String {
+pub(crate) fn whoami() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
@@ -815,4 +815,62 @@ fn ensure_goblin_ssh_key() -> Result<String> {
         format!("Failed to read {}", public_key_path.display())
     })?;
     Ok(pubkey.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cloud_init(is_rust: bool, packages: &[String], agents: &[String]) -> String {
+        // Pin timezone so snapshots are deterministic across machines
+        std::env::set_var("TZ", "UTC");
+        build_cloud_init("testuser", "ssh-ed25519 AAAA", "tskey-auth-xxx", is_rust, packages, agents)
+    }
+
+    #[test]
+    fn cloud_init_basic() {
+        let output = test_cloud_init(false, &[], &[]);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_rust() {
+        let output = test_cloud_init(true, &[], &[]);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_packages() {
+        let packages = vec!["nodejs".to_string(), "python3".to_string()];
+        let output = test_cloud_init(false, &packages, &[]);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_agents() {
+        let agents = vec!["claude-code".to_string(), "opencode".to_string()];
+        let output = test_cloud_init(false, &[], &agents);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_full() {
+        let packages = vec!["nodejs".to_string()];
+        let agents = vec!["claude-code".to_string()];
+        let output = test_cloud_init(true, &packages, &agents);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn whoami_uses_user_env() {
+        let key = "USER";
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, "gobtest");
+        let result = whoami();
+        match original {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        assert_eq!(result, "gobtest");
+    }
 }

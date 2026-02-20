@@ -138,11 +138,58 @@ pub fn load_config() -> Result<Config> {
     })
 }
 
-fn resolve_value(env_var: &str, file_value: Option<&str>) -> Option<String> {
+pub(crate) fn resolve_value(env_var: &str, file_value: Option<&str>) -> Option<String> {
     if let Ok(val) = std::env::var(env_var) {
         if !val.is_empty() {
             return Some(val);
         }
     }
     file_value.filter(|v| !v.is_empty()).map(|v| v.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_value_env_var_takes_priority() {
+        let key = "GOB_TEST_RESOLVE_PRIORITY";
+        std::env::set_var(key, "from_env");
+        let result = resolve_value(key, Some("from_file"));
+        std::env::remove_var(key);
+        assert_eq!(result, Some("from_env".to_string()));
+    }
+
+    #[test]
+    fn resolve_value_falls_back_to_file() {
+        let key = "GOB_TEST_RESOLVE_FALLBACK";
+        std::env::remove_var(key);
+        assert_eq!(
+            resolve_value(key, Some("from_file")),
+            Some("from_file".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_value_empty_env_treated_as_absent() {
+        let key = "GOB_TEST_RESOLVE_EMPTY_ENV";
+        std::env::set_var(key, "");
+        let result = resolve_value(key, Some("from_file"));
+        std::env::remove_var(key);
+        assert_eq!(result, Some("from_file".to_string()));
+    }
+
+    #[test]
+    fn resolve_value_both_absent_returns_none() {
+        let key = "GOB_TEST_RESOLVE_NONE";
+        std::env::remove_var(key);
+        assert_eq!(resolve_value(key, None), None);
+    }
+
+    #[test]
+    fn resolve_value_empty_file_value_returns_none() {
+        let key = "GOB_TEST_RESOLVE_EMPTY_FILE";
+        std::env::remove_var(key);
+        assert_eq!(resolve_value(key, Some("")), None);
+    }
 }
