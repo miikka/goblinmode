@@ -1,0 +1,80 @@
+{
+  "created": "2026-02-20T09:19:42.648188+00:00",
+  "total": {
+    "percent": 31.74418604651163,
+    "covered": 546,
+    "count": 1720
+  },
+  "files": {
+    "src/cmd/down.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 48
+    },
+    "src/cmd/mosh.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 10
+    },
+    "src/cmd/pause.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 47
+    },
+    "src/cmd/prune.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 61
+    },
+    "src/cmd/status.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 28
+    },
+    "src/cmd/up.rs": {
+      "percent": 13.738019169329077,
+      "covered": 86,
+      "count": 626
+    },
+    "src/cmd/zed.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 10
+    },
+    "src/config.rs": {
+      "percent": 99.4186046511628,
+      "covered": 342,
+      "count": 344
+    },
+    "src/hetzner.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 250
+    },
+    "src/main.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 11
+    },
+    "src/project.rs": {
+      "percent": 53.48837209302325,
+      "covered": 23,
+      "count": 43
+    },
+    "src/project_config.rs": {
+      "percent": 100.0,
+      "covered": 59,
+      "count": 59
+    },
+    "src/state.rs": {
+      "percent": 46.15384615384615,
+      "covered": 36,
+      "count": 78
+    },
+    "src/tailscale.rs": {
+      "percent": 0.0,
+      "covered": 0,
+      "count": 105
+    }
+  }
+}
