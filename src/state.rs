@@ -2,6 +2,28 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AppliedRuntimeConfig {
+    #[serde(default)]
+    pub vm_packages: Vec<String>,
+    #[serde(default)]
+    pub coding_agents: Vec<String>,
+    #[serde(default)]
+    pub serve_ports: Vec<u16>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AppliedProvisioningConfig {
+    #[serde(default)]
+    pub server_type: String,
+    #[serde(default)]
+    pub is_rust: bool,
+    #[serde(default)]
+    pub dotfiles_repo: Option<String>,
+    #[serde(default)]
+    pub dotfiles_install: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectState {
     #[serde(default)]
@@ -14,6 +36,10 @@ pub struct ProjectState {
     pub hostname: String,
     #[serde(default)]
     pub snapshot_id: Option<u64>,
+    #[serde(default)]
+    pub applied_runtime: Option<AppliedRuntimeConfig>,
+    #[serde(default)]
+    pub applied_provisioning: Option<AppliedProvisioningConfig>,
 }
 
 fn default_username() -> String {
@@ -73,6 +99,8 @@ mod tests {
             username: "testuser".to_string(),
             hostname: "gob-test".to_string(),
             snapshot_id: None,
+            applied_runtime: None,
+            applied_provisioning: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         let deserialized: ProjectState = serde_json::from_str(&json).unwrap();
@@ -98,9 +126,33 @@ mod tests {
             username: "u".to_string(),
             hostname: "h".to_string(),
             snapshot_id: Some(99999),
+            applied_runtime: None,
+            applied_provisioning: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         let deserialized: ProjectState = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.snapshot_id, Some(99999));
+    }
+
+    #[test]
+    fn missing_applied_configs_default_to_none() {
+        let json = r#"{"server_id": 1, "ipv4": "1.2.3.4", "hostname": "gob-x"}"#;
+        let state: ProjectState = serde_json::from_str(json).unwrap();
+        assert!(state.applied_runtime.is_none());
+        assert!(state.applied_provisioning.is_none());
+    }
+
+    #[test]
+    fn applied_config_structs_default_empty() {
+        let runtime = AppliedRuntimeConfig::default();
+        assert!(runtime.vm_packages.is_empty());
+        assert!(runtime.coding_agents.is_empty());
+        assert!(runtime.serve_ports.is_empty());
+
+        let provisioning = AppliedProvisioningConfig::default();
+        assert!(provisioning.server_type.is_empty());
+        assert!(!provisioning.is_rust);
+        assert!(provisioning.dotfiles_repo.is_none());
+        assert!(provisioning.dotfiles_install.is_none());
     }
 }
