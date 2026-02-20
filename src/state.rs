@@ -60,3 +60,47 @@ pub fn delete_state(project_id: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_round_trip() {
+        let state = ProjectState {
+            server_id: 12345,
+            ipv4: "1.2.3.4".to_string(),
+            username: "testuser".to_string(),
+            hostname: "gob-test".to_string(),
+            snapshot_id: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: ProjectState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.server_id, 12345);
+        assert_eq!(deserialized.ipv4, "1.2.3.4");
+        assert_eq!(deserialized.username, "testuser");
+        assert_eq!(deserialized.hostname, "gob-test");
+        assert!(deserialized.snapshot_id.is_none());
+    }
+
+    #[test]
+    fn missing_username_defaults_to_root() {
+        let json = r#"{"server_id": 1, "ipv4": "1.2.3.4", "hostname": "gob-x"}"#;
+        let state: ProjectState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.username, "root");
+    }
+
+    #[test]
+    fn snapshot_id_round_trips() {
+        let state = ProjectState {
+            server_id: 1,
+            ipv4: "1.2.3.4".to_string(),
+            username: "u".to_string(),
+            hostname: "h".to_string(),
+            snapshot_id: Some(99999),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: ProjectState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.snapshot_id, Some(99999));
+    }
+}

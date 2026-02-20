@@ -30,9 +30,40 @@ pub fn detect_project() -> Result<Project> {
     }
 }
 
-fn make_project_id(name: &str, path: &Path) -> String {
+pub(crate) fn make_project_id(name: &str, path: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     path.to_string_lossy().hash(&mut hasher);
     let hash = hasher.finish();
     format!("{}-{:x}", name, hash & 0xFFFF)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn make_project_id_format() {
+        let id = make_project_id("myproject", &PathBuf::from("/home/user/myproject"));
+        // Should be "name-hexhash"
+        let parts: Vec<&str> = id.splitn(2, '-').collect();
+        assert_eq!(parts[0], "myproject");
+        // Hash part should be valid hex
+        assert!(u64::from_str_radix(parts[1], 16).is_ok());
+    }
+
+    #[test]
+    fn make_project_id_deterministic() {
+        let path = PathBuf::from("/home/user/project");
+        let id1 = make_project_id("proj", &path);
+        let id2 = make_project_id("proj", &path);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn make_project_id_different_paths_differ() {
+        let id1 = make_project_id("proj", &PathBuf::from("/home/user/a"));
+        let id2 = make_project_id("proj", &PathBuf::from("/home/user/b"));
+        assert_ne!(id1, id2);
+    }
 }
