@@ -173,3 +173,81 @@ pub(crate) fn resolve_secret(
     Ok(file_value.filter(|v| !v.is_empty()).map(|s| s.to_string()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_secret_env_var_takes_priority() {
+        let key = "GOB_TEST_SECRET_PRIORITY";
+        std::env::set_var(key, "from_env");
+        let result = resolve_secret(key, Some("echo from_cmd"), Some("from_file")).unwrap();
+        std::env::remove_var(key);
+        assert_eq!(result, Some("from_env".to_string()));
+    }
+
+    #[test]
+    fn resolve_secret_cmd_used_when_no_env_var() {
+        let key = "GOB_TEST_SECRET_CMD";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, Some("echo hello"), Some("from_file")).unwrap();
+        assert_eq!(result, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn resolve_secret_falls_back_to_file_value() {
+        let key = "GOB_TEST_SECRET_FILE";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, None, Some("from_file")).unwrap();
+        assert_eq!(result, Some("from_file".to_string()));
+    }
+
+    #[test]
+    fn resolve_secret_all_absent_returns_none() {
+        let key = "GOB_TEST_SECRET_NONE";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, None, None).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_secret_empty_env_skipped() {
+        let key = "GOB_TEST_SECRET_EMPTY_ENV";
+        std::env::set_var(key, "");
+        let result = resolve_secret(key, None, Some("from_file")).unwrap();
+        std::env::remove_var(key);
+        assert_eq!(result, Some("from_file".to_string()));
+    }
+
+    #[test]
+    fn resolve_secret_empty_file_value_returns_none() {
+        let key = "GOB_TEST_SECRET_EMPTY_FILE";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, None, Some("")).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_secret_cmd_output_is_trimmed() {
+        let key = "GOB_TEST_SECRET_TRIM";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, Some("printf '  trimmed  '"), None).unwrap();
+        assert_eq!(result, Some("trimmed".to_string()));
+    }
+
+    #[test]
+    fn resolve_secret_cmd_failure_returns_error() {
+        let key = "GOB_TEST_SECRET_CMD_FAIL";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, Some("exit 1"), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_secret_empty_cmd_output_falls_through_to_file() {
+        let key = "GOB_TEST_SECRET_CMD_EMPTY";
+        std::env::remove_var(key);
+        let result = resolve_secret(key, Some("true"), Some("from_file")).unwrap();
+        assert_eq!(result, Some("from_file".to_string()));
+    }
+}
