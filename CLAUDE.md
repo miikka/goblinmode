@@ -41,3 +41,5 @@ There are no tests yet. Binary is `gob`.
 
 - The project is hosted with Forgejo at https://forgejo.sargo-hamlet.ts.net/miikka/goblinmode/
 - You can use `fj` command-line tool to interact with Forgejo
+- Run `cargo fmt` before committing.
+- `just ci` should pass before you submit a PR.

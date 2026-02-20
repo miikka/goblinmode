@@ -22,7 +22,10 @@ pub fn run() -> Result<()> {
     if !servers.is_empty() {
         println!("Found {} server(s):", servers.len());
         for s in &servers {
-            println!("  {} (id: {}, status: {}, ip: {})", s.name, s.id, s.status, s.ipv4);
+            println!(
+                "  {} (id: {}, status: {}, ip: {})",
+                s.name, s.id, s.status, s.ipv4
+            );
         }
     }
 

@@ -105,9 +105,7 @@ fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
     )
     .context("Failed to retrieve Tailscale auth key")?;
 
-    let tailscale_tags = tailscale
-        .and_then(|t| t.tags.clone())
-        .unwrap_or_default();
+    let tailscale_tags = tailscale.and_then(|t| t.tags.clone()).unwrap_or_default();
 
     let dotfiles = config_file.as_ref().and_then(|c| c.dotfiles.as_ref());
     let dotfiles_repo = dotfiles
@@ -296,10 +294,7 @@ coding_agents = ["claude"]
         let path = dir.path().join("nonexistent.toml");
         let result = with_env_locked(
             &guard,
-            &[
-                ("HETZNER_API_TOKEN", None),
-                ("TAILSCALE_API_KEY", None),
-            ],
+            &[("HETZNER_API_TOKEN", None), ("TAILSCALE_API_KEY", None)],
             || load_config_from(path),
         );
         assert!(result.is_err());
@@ -337,10 +332,7 @@ coding_agents = ["claude"]
         let path = write_temp_config(&dir, "this is not valid toml ][[[");
         let result = with_env_locked(
             &guard,
-            &[
-                ("HETZNER_API_TOKEN", None),
-                ("TAILSCALE_API_KEY", None),
-            ],
+            &[("HETZNER_API_TOKEN", None), ("TAILSCALE_API_KEY", None)],
             || load_config_from(path),
         );
         assert!(result.is_err());

@@ -1,15 +1,15 @@
 {
-  "created": "2026-02-20T09:01:14.473144+00:00",
+  "created": "2026-02-20T09:05:18.205676+00:00",
   "total": {
-    "percent": 32.41176470588235,
-    "covered": 551,
-    "count": 1700
+    "percent": 32.824858757062145,
+    "covered": 581,
+    "count": 1770
   },
   "files": {
     "src/cmd/down.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 48
+      "count": 49
     },
     "src/cmd/mosh.rs": {
       "percent": 0.0,
@@ -24,7 +24,7 @@
     "src/cmd/prune.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 58
+      "count": 61
     },
     "src/cmd/status.rs": {
       "percent": 0.0,
@@ -32,14 +32,14 @@
       "count": 28
     },
     "src/cmd/up.rs": {
-      "percent": 13.673805601317955,
-      "covered": 83,
-      "count": 607
+      "percent": 16.966966966966968,
+      "covered": 113,
+      "count": 666
     },
     "src/cmd/zed.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 10
+      "count": 11
     },
     "src/config.rs": {
       "percent": 99.43181818181817,
@@ -49,7 +49,7 @@
     "src/hetzner.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 244
+      "count": 250
     },
     "src/main.rs": {
       "percent": 0.0,

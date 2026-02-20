@@ -184,7 +184,11 @@ impl HetznerClient {
             bail!("Failed to list SSH keys: {}", resp.status());
         }
         let keys: SshKeysResponse = resp.json().context("Failed to parse SSH keys response")?;
-        Ok(keys.ssh_keys.into_iter().find(|k| k.name == name).map(|k| k.id))
+        Ok(keys
+            .ssh_keys
+            .into_iter()
+            .find(|k| k.name == name)
+            .map(|k| k.id))
     }
 
     /// Upload an SSH public key. Returns the key ID.
@@ -259,7 +263,9 @@ impl HetznerClient {
             let body = resp.text().unwrap_or_default();
             bail!("Failed to create image ({}): {}", status, body);
         }
-        let body: serde_json::Value = resp.json().context("Failed to parse create_image response")?;
+        let body: serde_json::Value = resp
+            .json()
+            .context("Failed to parse create_image response")?;
         let image_id = body["image"]["id"]
             .as_u64()
             .context("Missing image id in create_image response")?;
@@ -274,9 +280,7 @@ impl HetznerClient {
                 bail!("Failed to get image status: {}", resp.status());
             }
             let body: serde_json::Value = resp.json().context("Failed to parse image response")?;
-            let status = body["image"]["status"]
-                .as_str()
-                .unwrap_or("unknown");
+            let status = body["image"]["status"].as_str().unwrap_or("unknown");
             if status == "available" {
                 return Ok(());
             }
@@ -291,16 +295,18 @@ impl HetznerClient {
             bail!("Failed to list images: {}", resp.status());
         }
         let body: serde_json::Value = resp.json().context("Failed to parse images response")?;
-        let images = body["images"]
-            .as_array()
-            .context("Missing images array")?;
+        let images = body["images"].as_array().context("Missing images array")?;
         let mut result = Vec::new();
         for img in images {
             let id = img["id"].as_u64().unwrap_or(0);
             let description = img["description"].as_str().unwrap_or("").to_string();
             let created = img["created"].as_str().unwrap_or("").to_string();
             if id != 0 {
-                result.push(SnapshotInfo { id, description, created });
+                result.push(SnapshotInfo {
+                    id,
+                    description,
+                    created,
+                });
             }
         }
         Ok(result)

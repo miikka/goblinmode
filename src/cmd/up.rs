@@ -42,7 +42,12 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
             // 4a. Check for snapshot restore
             if let Some(snapshot_id) = existing.snapshot_id {
                 return restore_from_snapshot(
-                    &project, &cfg, &client, snapshot_id, &existing, &project_config,
+                    &project,
+                    &cfg,
+                    &client,
+                    snapshot_id,
+                    &existing,
+                    &project_config,
                 );
             }
 
@@ -114,7 +119,10 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         &cfg.coding_agents,
     );
     let server_name = format!("gob-{}", project.name);
-    println!("Creating server '{}' (type: {})...", server_name, project_config.server_type);
+    println!(
+        "Creating server '{}' (type: {})...",
+        server_name, project_config.server_type
+    );
     let (server_id, initial_ip) = client.create_server(
         &server_name,
         &project_config.server_type,
@@ -223,7 +231,10 @@ fn restore_from_snapshot(
         None,
         Some(vec![hetzner_key_id]),
     )?;
-    println!("  Server created (id: {}), waiting for it to start...", server_id);
+    println!(
+        "  Server created (id: {}), waiting for it to start...",
+        server_id
+    );
 
     // Save state immediately so Ctrl-C doesn't orphan the server
     let project_state = state::ProjectState {
@@ -257,19 +268,20 @@ fn restore_from_snapshot(
     let tailscale_auth_key = resolve_tailscale_auth_key(cfg)?;
     let ts_result = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &format!("{}@{}", username, ip),
-            &format!(
-                "sudo tailscale up --auth-key={} --ssh",
-                tailscale_auth_key
-            ),
+            &format!("sudo tailscale up --auth-key={} --ssh", tailscale_auth_key),
         ])
         .output();
     match ts_result {
         Ok(output) if output.status.success() => println!("ok"),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("Warning: tailscale re-auth may have failed: {}", stderr.trim());
+            eprintln!(
+                "Warning: tailscale re-auth may have failed: {}",
+                stderr.trim()
+            );
         }
         Err(e) => eprintln!("Warning: tailscale re-auth failed: {}", e),
     }
@@ -336,7 +348,8 @@ fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
     );
     let output = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &format!("{}@{}", username, ip),
             &remote_cmd,
         ])
@@ -397,7 +410,9 @@ fn push_to_vm(
     let ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new";
 
     let branch = if branch_output.status.success() {
-        String::from_utf8_lossy(&branch_output.stdout).trim().to_string()
+        String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string()
     } else {
         "main".to_string()
     };
@@ -426,7 +441,8 @@ fn push_to_vm(
     // Checkout the pushed branch on the VM
     let checkout_output = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &format!("{}@{}", username, ip),
             &format!("cd ~/{} && git checkout {}", project_name, branch),
         ])
@@ -434,19 +450,18 @@ fn push_to_vm(
         .context("Failed to checkout branch on VM")?;
     if !checkout_output.status.success() {
         let stderr = String::from_utf8_lossy(&checkout_output.stderr);
-        bail!("Failed to checkout branch '{}' on VM: {}", branch, stderr.trim());
+        bail!(
+            "Failed to checkout branch '{}' on VM: {}",
+            branch,
+            stderr.trim()
+        );
     }
 
     println!("  Project pushed to {}", remote_url);
     Ok(())
 }
 
-fn setup_vm_origin(
-    username: &str,
-    ip: &str,
-    project_root: &std::path::Path,
-    project_name: &str,
-) {
+fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, project_name: &str) {
     // Get local origin URL
     let origin_output = Command::new("git")
         .args(["remote", "get-url", "origin"])
@@ -468,7 +483,8 @@ fn setup_vm_origin(
     );
     let result = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &format!("{}@{}", username, ip),
             &remote_cmd,
         ])
@@ -506,10 +522,14 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
         println!("  Generating VM SSH key...");
         let status = Command::new("ssh-keygen")
             .args([
-                "-t", "ed25519",
-                "-f", &private_key_path.to_string_lossy(),
-                "-N", "",
-                "-C", "goblinmode-vm",
+                "-t",
+                "ed25519",
+                "-f",
+                &private_key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-C",
+                "goblinmode-vm",
             ])
             .status();
         match status {
@@ -530,7 +550,8 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     // SCP private and public key to VM
     let scp_result = Command::new("scp")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &private_key_path.to_string_lossy(),
             &format!("{}:~/.ssh/id_ed25519", target),
         ])
@@ -542,7 +563,8 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
 
     let scp_result = Command::new("scp")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &public_key_path.to_string_lossy(),
             &format!("{}:~/.ssh/id_ed25519.pub", target),
         ])
@@ -561,7 +583,8 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     );
     let _ = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
             &target,
             &remote_cmd,
         ])
@@ -722,10 +745,7 @@ pub(crate) fn build_cloud_init(
         Some(tz) => format!("\ntimezone: {tz}"),
         None => String::new(),
     };
-    let configurable_packages: String = vm_packages
-        .iter()
-        .map(|p| format!("\n  - {p}"))
-        .collect();
+    let configurable_packages: String = vm_packages.iter().map(|p| format!("\n  - {p}")).collect();
 
     // Accumulate runcmd entries for each coding agent (run as the provisioned user)
     let mut agent_cmds = String::new();
@@ -799,10 +819,14 @@ fn ensure_goblin_ssh_key() -> Result<String> {
         println!("Generating goblinmode SSH key...");
         let status = Command::new("ssh-keygen")
             .args([
-                "-t", "ed25519",
-                "-f", &private_key_path.to_string_lossy(),
-                "-N", "",
-                "-C", "goblinmode",
+                "-t",
+                "ed25519",
+                "-f",
+                &private_key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-C",
+                "goblinmode",
             ])
             .status()
             .context("Failed to run ssh-keygen")?;
@@ -811,9 +835,8 @@ fn ensure_goblin_ssh_key() -> Result<String> {
         }
     }
 
-    let pubkey = fs::read_to_string(&public_key_path).with_context(|| {
-        format!("Failed to read {}", public_key_path.display())
-    })?;
+    let pubkey = fs::read_to_string(&public_key_path)
+        .with_context(|| format!("Failed to read {}", public_key_path.display()))?;
     Ok(pubkey.trim().to_string())
 }
 
@@ -824,7 +847,14 @@ mod tests {
     fn test_cloud_init(is_rust: bool, packages: &[String], agents: &[String]) -> String {
         // Pin timezone so snapshots are deterministic across machines
         std::env::set_var("TZ", "UTC");
-        build_cloud_init("testuser", "ssh-ed25519 AAAA", "tskey-auth-xxx", is_rust, packages, agents)
+        build_cloud_init(
+            "testuser",
+            "ssh-ed25519 AAAA",
+            "tskey-auth-xxx",
+            is_rust,
+            packages,
+            agents,
+        )
     }
 
     #[test]
