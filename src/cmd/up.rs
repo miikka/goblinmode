@@ -10,6 +10,7 @@ use crate::hetzner::HetznerClient;
 use crate::project;
 use crate::project_config;
 use crate::state;
+use crate::tailscale::TailscaleClient;
 
 /// Connection info for a running environment.
 pub struct Env {
@@ -102,11 +103,12 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 
     // 6. Create server with cloud-init
     let username = whoami();
+    let tailscale_auth_key = resolve_tailscale_auth_key(&cfg)?;
     let is_rust = project.root.join("Cargo.toml").exists();
     let user_data = build_cloud_init(
         &username,
         ssh_pubkey.trim(),
-        &cfg.tailscale_auth_key,
+        &tailscale_auth_key,
         is_rust,
         &cfg.vm_packages,
         &cfg.coding_agents,
@@ -252,13 +254,14 @@ fn restore_from_snapshot(
     // Re-authenticate tailscale
     print!("Re-authenticating Tailscale... ");
     io::stdout().flush()?;
+    let tailscale_auth_key = resolve_tailscale_auth_key(cfg)?;
     let ts_result = Command::new("ssh")
         .args([
             "-o", "StrictHostKeyChecking=accept-new",
             &format!("{}@{}", username, ip),
             &format!(
                 "sudo tailscale up --auth-key={} --ssh",
-                cfg.tailscale_auth_key
+                tailscale_auth_key
             ),
         ])
         .output();
@@ -652,6 +655,17 @@ fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
             ),
         }
     }
+}
+
+/// Resolve the Tailscale auth key: use the configured key if set, otherwise
+/// create a one-time preauthorized key via the Tailscale API.
+fn resolve_tailscale_auth_key(cfg: &config::Config) -> Result<String> {
+    if let Some(ref key) = cfg.tailscale_auth_key {
+        return Ok(key.clone());
+    }
+    println!("No tailscale_auth_key configured — creating one-time key via API...");
+    let ts = TailscaleClient::new(cfg.tailscale_api_key.clone());
+    ts.create_auth_key(&cfg.tailscale_tags)
 }
 
 fn detect_timezone() -> Option<String> {

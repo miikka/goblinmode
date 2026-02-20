@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const BASE_URL: &str = "https://api.tailscale.com/api/v2";
 
@@ -109,4 +109,79 @@ impl TailscaleClient {
 pub struct DeviceInfo {
     pub id: String,
     pub hostname: String,
+}
+
+impl TailscaleClient {
+    /// Create a one-time preauthorized auth key via the Tailscale API.
+    /// Tags are applied to the created key; if empty, the device is a user device.
+    pub fn create_auth_key(&self, tags: &[String]) -> Result<String> {
+        #[derive(Serialize)]
+        struct DeviceCreate<'a> {
+            reusable: bool,
+            ephemeral: bool,
+            preauthorized: bool,
+            #[serde(skip_serializing_if = "slice_is_empty")]
+            tags: &'a [String],
+        }
+
+        fn slice_is_empty(s: &&[String]) -> bool {
+            s.is_empty()
+        }
+
+        #[derive(Serialize)]
+        struct DeviceCapabilities<'a> {
+            create: DeviceCreate<'a>,
+        }
+
+        #[derive(Serialize)]
+        struct Capabilities<'a> {
+            devices: DeviceCapabilities<'a>,
+        }
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CreateKeyRequest<'a> {
+            capabilities: Capabilities<'a>,
+            expiry_seconds: u32,
+        }
+
+        #[derive(Deserialize)]
+        struct CreateKeyResponse {
+            key: String,
+        }
+
+        let request = CreateKeyRequest {
+            capabilities: Capabilities {
+                devices: DeviceCapabilities {
+                    create: DeviceCreate {
+                        reusable: false,
+                        ephemeral: false,
+                        preauthorized: true,
+                        tags,
+                    },
+                },
+            },
+            expiry_seconds: 300, // 5 minutes — enough to provision and connect
+        };
+
+        let resp = self
+            .client
+            .post(format!("{}/tailnet/-/keys", BASE_URL))
+            .basic_auth(&self.api_key, Option::<&str>::None)
+            .json(&request)
+            .send()
+            .context("Failed to create Tailscale auth key")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            bail!("Failed to create Tailscale auth key ({}): {}", status, body);
+        }
+
+        let response: CreateKeyResponse = resp
+            .json()
+            .context("Failed to parse Tailscale create key response")?;
+
+        Ok(response.key)
+    }
 }
