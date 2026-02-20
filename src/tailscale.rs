@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, instrument};
 
 const BASE_URL: &str = "https://api.tailscale.com/api/v2";
 
@@ -153,6 +153,7 @@ impl TailscaleClient {
             .collect())
     }
 
+    #[instrument(level = "debug", skip(self), fields(path = path))]
     fn get(&self, path: &str) -> Result<HttpResponse> {
         let start = Instant::now();
         if let Some(resp) = self.maybe_mock("GET", path, None)? {
@@ -184,6 +185,7 @@ impl TailscaleClient {
         Ok(HttpResponse { status, body })
     }
 
+    #[instrument(level = "debug", skip(self), fields(path = path))]
     fn delete(&self, path: &str) -> Result<HttpResponse> {
         let start = Instant::now();
         if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
@@ -215,6 +217,7 @@ impl TailscaleClient {
         Ok(HttpResponse { status, body })
     }
 
+    #[instrument(level = "debug", skip(self, body), fields(path = path))]
     fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
         let start = Instant::now();
         let request_body = serde_json::to_string(body)?;

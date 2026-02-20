@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::cmd::down;
 use crate::config;
@@ -22,6 +22,7 @@ pub struct Env {
 
 /// Ensure the dev environment is running, provisioning if needed.
 /// Returns connection info.
+#[instrument(level = "info", skip_all, fields(reset = reset))]
 pub fn ensure_running(reset: bool) -> Result<Env> {
     info!(reset = reset, "up_ensure_running_start");
     // 1. Detect project root
@@ -237,6 +238,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     })
 }
 
+#[instrument(level = "info", skip_all, fields(reset = reset))]
 pub fn run(reset: bool) -> Result<()> {
     info!(reset = reset, "up_command_start");
     let env = ensure_running(reset)?;
@@ -429,6 +431,11 @@ fn reconcile_runtime_config_with<F>(
     reconcile_tailscale_serve_with(&current.serve_ports, &mut run_remote);
 }
 
+#[instrument(
+    level = "info",
+    skip_all,
+    fields(snapshot_id = snapshot_id, project = %project.name)
+)]
 fn restore_from_snapshot(
     project: &crate::project::Project,
     cfg: &config::Config,
@@ -560,6 +567,7 @@ fn restore_from_snapshot(
     })
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
 fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for SSH... ");
     io::stdout().flush()?;
@@ -596,6 +604,7 @@ fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     anyhow::bail!("Timed out waiting for SSH on {}", ip);
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip, project_name = project_name))]
 fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
     println!("Initializing git repo on VM...");
     let remote_cmd = format!(
@@ -619,6 +628,16 @@ fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
     Ok(())
 }
 
+#[instrument(
+    level = "info",
+    skip_all,
+    fields(
+        username = username,
+        hostname = hostname,
+        ip = ip,
+        project_name = project_name
+    )
+)]
 fn push_to_vm(
     project_root: &std::path::Path,
     username: &str,
@@ -716,6 +735,7 @@ fn push_to_vm(
     Ok(())
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip, project_name = project_name))]
 fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, project_name: &str) {
     // Get local origin URL
     let origin_output = Command::new("git")
@@ -752,6 +772,7 @@ fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, pro
     }
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
 fn setup_vm_ssh_key(username: &str, ip: &str) {
     println!("Setting up SSH key on VM...");
 
@@ -852,6 +873,7 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     }
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
 fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for cloud-init... ");
     io::stdout().flush()?;
@@ -885,6 +907,7 @@ fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
     Ok(())
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip, repo = repo))]
 fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
     println!("Setting up dotfiles...");
 
@@ -912,6 +935,7 @@ fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
     }
 }
 
+#[instrument(level = "debug", skip_all, fields(target = target, remote_cmd = remote_cmd))]
 fn run_remote_status(target: &str, remote_cmd: &str) -> io::Result<std::process::ExitStatus> {
     let status = Command::new("ssh")
         .args(["-o", "StrictHostKeyChecking=accept-new", target, remote_cmd])
@@ -933,6 +957,7 @@ fn run_remote_status(target: &str, remote_cmd: &str) -> io::Result<std::process:
     status
 }
 
+#[instrument(level = "debug", skip_all, fields(ports = ?ports))]
 fn reconcile_tailscale_serve_with<F>(ports: &[u16], run_remote: &mut F)
 where
     F: FnMut(&str) -> bool,
@@ -953,6 +978,7 @@ where
     }
 }
 
+#[instrument(level = "info", skip_all, fields(username = username, ip = ip, ports = ?ports))]
 fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
     let target = format!("{}@{}", username, ip);
     reconcile_tailscale_serve_with(ports, &mut |remote_cmd| {
@@ -976,6 +1002,7 @@ fn coding_agent_install_cmd(agent: &str, username: &str) -> Option<String> {
 
 /// Resolve the Tailscale auth key: use the configured key if set, otherwise
 /// create a one-time preauthorized key via the Tailscale API.
+#[instrument(level = "info", skip_all)]
 fn resolve_tailscale_auth_key(cfg: &config::Config) -> Result<String> {
     if let Some(ref key) = cfg.tailscale_auth_key {
         return Ok(key.clone());
