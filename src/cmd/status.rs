@@ -184,7 +184,10 @@ mod tests {
         };
         let mut out = VecOutput::new();
         run_with(&deps, &mut out).unwrap();
-        assert_eq!(out.lines.borrow().as_slice(), &["No VM for project 'proj'."]);
+        assert_eq!(
+            out.lines.borrow().as_slice(),
+            &["No VM for project 'proj'."]
+        );
     }
 
     #[test]

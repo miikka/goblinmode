@@ -214,12 +214,16 @@ mod tests {
 
     impl PauseActions for MockActions {
         fn shutdown_server(&mut self, server_id: u64) -> Result<()> {
-            self.calls.borrow_mut().push(format!("shutdown:{server_id}"));
+            self.calls
+                .borrow_mut()
+                .push(format!("shutdown:{server_id}"));
             Ok(())
         }
 
         fn wait_for_server_off(&mut self, server_id: u64) -> Result<()> {
-            self.calls.borrow_mut().push(format!("wait_off:{server_id}"));
+            self.calls
+                .borrow_mut()
+                .push(format!("wait_off:{server_id}"));
             Ok(())
         }
 
@@ -231,12 +235,16 @@ mod tests {
         }
 
         fn wait_for_image(&mut self, image_id: u64) -> Result<()> {
-            self.calls.borrow_mut().push(format!("wait_image:{image_id}"));
+            self.calls
+                .borrow_mut()
+                .push(format!("wait_image:{image_id}"));
             Ok(())
         }
 
         fn delete_server(&mut self, server_id: u64) -> Result<()> {
-            self.calls.borrow_mut().push(format!("delete_server:{server_id}"));
+            self.calls
+                .borrow_mut()
+                .push(format!("delete_server:{server_id}"));
             Ok(())
         }
 

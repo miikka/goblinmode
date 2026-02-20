@@ -9,7 +9,10 @@ trait PruneRunner {
     fn load_config_keys(&mut self) -> Result<(String, String)>;
     fn list_servers(&mut self, hetzner_token: &str) -> Result<Vec<crate::hetzner::ServerInfo>>;
     fn list_snapshots(&mut self, hetzner_token: &str) -> Result<Vec<crate::hetzner::SnapshotInfo>>;
-    fn list_devices(&mut self, tailscale_api_key: &str) -> Result<Vec<crate::tailscale::DeviceInfo>>;
+    fn list_devices(
+        &mut self,
+        tailscale_api_key: &str,
+    ) -> Result<Vec<crate::tailscale::DeviceInfo>>;
     fn confirm_delete_all(&mut self) -> Result<bool>;
     fn delete_server(&mut self, hetzner_token: &str, server_id: u64) -> Result<()>;
     fn delete_image(&mut self, hetzner_token: &str, image_id: u64) -> Result<()>;
@@ -35,7 +38,10 @@ impl PruneRunner for RealPruneRunner {
         hetzner.list_goblinmode_snapshots()
     }
 
-    fn list_devices(&mut self, tailscale_api_key: &str) -> Result<Vec<crate::tailscale::DeviceInfo>> {
+    fn list_devices(
+        &mut self,
+        tailscale_api_key: &str,
+    ) -> Result<Vec<crate::tailscale::DeviceInfo>> {
         let tailscale = TailscaleClient::new(tailscale_api_key.to_string());
         tailscale.list_gob_devices()
     }
@@ -125,7 +131,10 @@ fn run_with<R: PruneRunner>(runner: &mut R) -> Result<()> {
     }
 
     for s in &snapshots {
-        runner.line(format!("Deleting snapshot {} (id: {})...", s.description, s.id));
+        runner.line(format!(
+            "Deleting snapshot {} (id: {})...",
+            s.description, s.id
+        ));
         match runner.delete_image(&hetzner_token, s.id) {
             Ok(()) => runner.line("done".to_string()),
             Err(e) => runner.line(format!("failed: {}", e)),
@@ -165,15 +174,24 @@ mod tests {
             Ok((self.hetzner_token.clone(), self.tailscale_api_key.clone()))
         }
 
-        fn list_servers(&mut self, _hetzner_token: &str) -> Result<Vec<crate::hetzner::ServerInfo>> {
+        fn list_servers(
+            &mut self,
+            _hetzner_token: &str,
+        ) -> Result<Vec<crate::hetzner::ServerInfo>> {
             Ok(std::mem::take(&mut self.servers))
         }
 
-        fn list_snapshots(&mut self, _hetzner_token: &str) -> Result<Vec<crate::hetzner::SnapshotInfo>> {
+        fn list_snapshots(
+            &mut self,
+            _hetzner_token: &str,
+        ) -> Result<Vec<crate::hetzner::SnapshotInfo>> {
             Ok(std::mem::take(&mut self.snapshots))
         }
 
-        fn list_devices(&mut self, _tailscale_api_key: &str) -> Result<Vec<crate::tailscale::DeviceInfo>> {
+        fn list_devices(
+            &mut self,
+            _tailscale_api_key: &str,
+        ) -> Result<Vec<crate::tailscale::DeviceInfo>> {
             Ok(std::mem::take(&mut self.devices))
         }
 
@@ -293,6 +311,9 @@ mod tests {
                 "delete_device:d2",
             ]
         );
-        assert!(runner.lines.borrow().contains(&"Prune complete.".to_string()));
+        assert!(runner
+            .lines
+            .borrow()
+            .contains(&"Prune complete.".to_string()));
     }
 }

@@ -396,29 +396,31 @@ mod tests {
 
     #[test]
     fn create_auth_key_with_tags() {
-        let mut c = call("POST", "/tailnet/-/keys", 200, r#"{"key":"tskey-auth-123"}"#);
-        c.body_contains = Some(r#""tags":["tag:gob"]"#.to_string());
-        let client = TailscaleClient::with_mock_calls(
-            "api-key".to_string(),
-            "mock://".to_string(),
-            vec![c],
+        let mut c = call(
+            "POST",
+            "/tailnet/-/keys",
+            200,
+            r#"{"key":"tskey-auth-123"}"#,
         );
-        let key = client
-            .create_auth_key(&["tag:gob".to_string()])
-            .unwrap();
+        c.body_contains = Some(r#""tags":["tag:gob"]"#.to_string());
+        let client =
+            TailscaleClient::with_mock_calls("api-key".to_string(), "mock://".to_string(), vec![c]);
+        let key = client.create_auth_key(&["tag:gob".to_string()]).unwrap();
         assert_eq!(key, "tskey-auth-123");
     }
 
     #[test]
     fn create_auth_key_without_tags_omits_tags_field() {
-        let mut c = call("POST", "/tailnet/-/keys", 200, r#"{"key":"tskey-auth-123"}"#);
+        let mut c = call(
+            "POST",
+            "/tailnet/-/keys",
+            200,
+            r#"{"key":"tskey-auth-123"}"#,
+        );
         c.body_contains = Some(r#""expirySeconds":300"#.to_string());
         c.body_not_contains = Some(r#""tags":"#.to_string());
-        let client = TailscaleClient::with_mock_calls(
-            "api-key".to_string(),
-            "mock://".to_string(),
-            vec![c],
-        );
+        let client =
+            TailscaleClient::with_mock_calls("api-key".to_string(), "mock://".to_string(), vec![c]);
         let key = client.create_auth_key(&[]).unwrap();
         assert_eq!(key, "tskey-auth-123");
     }

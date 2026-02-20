@@ -288,7 +288,11 @@ impl HetznerClient {
         }
         let keys: SshKeysResponse =
             serde_json::from_str(&resp.body).context("Failed to parse SSH keys response")?;
-        Ok(keys.ssh_keys.into_iter().find(|k| k.name == name).map(|k| k.id))
+        Ok(keys
+            .ssh_keys
+            .into_iter()
+            .find(|k| k.name == name)
+            .map(|k| k.id))
     }
 
     /// Upload an SSH public key. Returns the key ID.
@@ -376,9 +380,7 @@ impl HetznerClient {
             }
             let body: serde_json::Value =
                 serde_json::from_str(&resp.body).context("Failed to parse image response")?;
-            let status = body["image"]["status"]
-                .as_str()
-                .unwrap_or("unknown");
+            let status = body["image"]["status"].as_str().unwrap_or("unknown");
             if status == "available" {
                 return Ok(());
             }
@@ -394,9 +396,7 @@ impl HetznerClient {
         }
         let body: serde_json::Value =
             serde_json::from_str(&resp.body).context("Failed to parse images response")?;
-        let images = body["images"]
-            .as_array()
-            .context("Missing images array")?;
+        let images = body["images"].as_array().context("Missing images array")?;
         let mut result = Vec::new();
         for img in images {
             let id = img["id"].as_u64().unwrap_or(0);
@@ -495,10 +495,18 @@ mod tests {
             r#"{"server":{"id":42,"name":"gob-x","status":"running","public_net":{"ipv4":{"ip":"1.2.3.4"}}}}"#,
         );
         c.body_contains = Some(r#""managed-by":"goblinmode""#.to_string());
-        let client = HetznerClient::with_mock_calls("token".to_string(), "mock://".to_string(), vec![c]);
+        let client =
+            HetznerClient::with_mock_calls("token".to_string(), "mock://".to_string(), vec![c]);
 
         let (id, ip) = client
-            .create_server("gob-x", "cx23", "debian-13", "hel1", Some("cloud"), Some(vec![1]))
+            .create_server(
+                "gob-x",
+                "cx23",
+                "debian-13",
+                "hel1",
+                Some("cloud"),
+                Some(vec![1]),
+            )
             .unwrap();
         assert_eq!(id, 42);
         assert_eq!(ip, "1.2.3.4");
@@ -585,7 +593,9 @@ mod tests {
                 r#"{"ssh_keys":[{"id":777,"name":"goblinmode"}]}"#,
             )],
         );
-        let id = client.ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA").unwrap();
+        let id = client
+            .ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA")
+            .unwrap();
         assert_eq!(id, 777);
     }
 
@@ -603,7 +613,9 @@ mod tests {
             "mock://".to_string(),
             vec![call("GET", "/ssh_keys", 200, r#"{"ssh_keys":[]}"#), create],
         );
-        let id = client.ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA").unwrap();
+        let id = client
+            .ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA")
+            .unwrap();
         assert_eq!(id, 888);
     }
 
@@ -653,7 +665,12 @@ mod tests {
         let client = HetznerClient::with_mock_calls(
             "token".to_string(),
             "mock://".to_string(),
-            vec![call("GET", "/images/2", 200, r#"{"image":{"status":"available"}}"#)],
+            vec![call(
+                "GET",
+                "/images/2",
+                200,
+                r#"{"image":{"status":"available"}}"#,
+            )],
         );
         client.wait_for_image(2).unwrap();
     }
