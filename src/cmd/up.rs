@@ -808,67 +808,43 @@ mod tests {
     use super::*;
 
     fn test_cloud_init(is_rust: bool, packages: &[String], agents: &[String]) -> String {
+        // Pin timezone so snapshots are deterministic across machines
+        std::env::set_var("TZ", "UTC");
         build_cloud_init("testuser", "ssh-ed25519 AAAA", "tskey-auth-xxx", is_rust, packages, agents)
     }
 
     #[test]
-    fn cloud_init_starts_with_cloud_config() {
+    fn cloud_init_basic() {
         let output = test_cloud_init(false, &[], &[]);
-        assert!(output.starts_with("#cloud-config"));
+        insta::assert_snapshot!(output);
     }
 
     #[test]
-    fn cloud_init_rust_includes_rustup() {
+    fn cloud_init_with_rust() {
         let output = test_cloud_init(true, &[], &[]);
-        assert!(output.contains("rustup"));
-        assert!(output.contains("build-essential"));
+        insta::assert_snapshot!(output);
     }
 
     #[test]
-    fn cloud_init_no_rust_omits_rustup() {
-        let output = test_cloud_init(false, &[], &[]);
-        assert!(!output.contains("rustup"));
-        assert!(!output.contains("build-essential"));
-    }
-
-    #[test]
-    fn cloud_init_vm_packages_included() {
+    fn cloud_init_with_packages() {
         let packages = vec!["nodejs".to_string(), "python3".to_string()];
         let output = test_cloud_init(false, &packages, &[]);
-        assert!(output.contains("- nodejs"));
-        assert!(output.contains("- python3"));
+        insta::assert_snapshot!(output);
     }
 
     #[test]
-    fn cloud_init_claude_code_agent() {
+    fn cloud_init_with_agents() {
+        let agents = vec!["claude-code".to_string(), "opencode".to_string()];
+        let output = test_cloud_init(false, &[], &agents);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_full() {
+        let packages = vec!["nodejs".to_string()];
         let agents = vec!["claude-code".to_string()];
-        let output = test_cloud_init(false, &[], &agents);
-        assert!(output.contains("claude.ai/install.sh"));
-    }
-
-    #[test]
-    fn cloud_init_opencode_agent() {
-        let agents = vec!["opencode".to_string()];
-        let output = test_cloud_init(false, &[], &agents);
-        assert!(output.contains("opencode.ai/install"));
-    }
-
-    #[test]
-    fn cloud_init_contains_username() {
-        let output = test_cloud_init(false, &[], &[]);
-        assert!(output.contains("name: testuser"));
-    }
-
-    #[test]
-    fn cloud_init_contains_ssh_key() {
-        let output = test_cloud_init(false, &[], &[]);
-        assert!(output.contains("ssh-ed25519 AAAA"));
-    }
-
-    #[test]
-    fn cloud_init_contains_tailscale_key() {
-        let output = test_cloud_init(false, &[], &[]);
-        assert!(output.contains("tskey-auth-xxx"));
+        let output = test_cloud_init(true, &packages, &agents);
+        insta::assert_snapshot!(output);
     }
 
     #[test]
