@@ -109,6 +109,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         &cfg.tailscale_auth_key,
         is_rust,
         &cfg.vm_packages,
+        &cfg.coding_agents,
     );
     let server_name = format!("gob-{}", project.name);
     println!("Creating server '{}' (type: {})...", server_name, project_config.server_type);
@@ -691,6 +692,7 @@ fn build_cloud_init(
     tailscale_auth_key: &str,
     is_rust: bool,
     vm_packages: &[String],
+    coding_agents: &[String],
 ) -> String {
     let extra_packages = if is_rust {
         "\n  - build-essential\n  - rustup"
@@ -710,6 +712,28 @@ fn build_cloud_init(
         .iter()
         .map(|p| format!("\n  - {p}"))
         .collect();
+
+    // Accumulate runcmd entries for each coding agent (run as the provisioned user)
+    let mut agent_cmds = String::new();
+
+    for agent in coding_agents {
+        match agent.as_str() {
+            "claude-code" => {
+                agent_cmds.push_str(&format!(
+                    "\n  - su - {username} -c 'curl -fsSL https://claude.ai/install.sh | bash'"
+                ));
+            }
+            "opencode" => {
+                agent_cmds.push_str(&format!(
+                    "\n  - su - {username} -c 'curl -fsSL https://opencode.ai/install | sh'"
+                ));
+            }
+            other => {
+                eprintln!("Warning: unknown coding_agent '{}', skipping", other);
+            }
+        }
+    }
+
     format!(
         r#"#cloud-config{timezone_line}
 users:
@@ -736,7 +760,7 @@ runcmd:
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --auth-key={tailscale_auth_key} --ssh
   - su - {username} -c "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
-  - su - {username} -c "/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data jj-cli"{rust_cmds}
+  - su - {username} -c "/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data jj-cli"{rust_cmds}{agent_cmds}
 "#
     )
 }

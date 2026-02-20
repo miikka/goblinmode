@@ -9,6 +9,7 @@ pub struct Config {
     pub dotfiles_repo: Option<String>,
     pub dotfiles_install: Option<String>,
     pub vm_packages: Vec<String>,
+    pub coding_agents: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -22,6 +23,7 @@ struct ConfigFile {
 #[derive(Deserialize)]
 struct VmConfig {
     packages: Option<Vec<String>>,
+    coding_agents: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +116,12 @@ pub fn load_config() -> Result<Config> {
         .and_then(|v| v.packages.clone())
         .unwrap_or_default();
 
+    let coding_agents = config_file
+        .as_ref()
+        .and_then(|c| c.vm.as_ref())
+        .and_then(|v| v.coding_agents.clone())
+        .unwrap_or_default();
+
     Ok(Config {
         hetzner_api_token,
         tailscale_auth_key,
@@ -121,6 +129,7 @@ pub fn load_config() -> Result<Config> {
         dotfiles_repo,
         dotfiles_install,
         vm_packages,
+        coding_agents,
     })
 }
 
