@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use tracing::info;
 
 const BASE_URL: &str = "https://api.tailscale.com/api/v2";
 
@@ -152,7 +154,16 @@ impl TailscaleClient {
     }
 
     fn get(&self, path: &str) -> Result<HttpResponse> {
+        let start = Instant::now();
         if let Some(resp) = self.maybe_mock("GET", path, None)? {
+            info!(
+                method = "GET",
+                path = path,
+                status = resp.status,
+                mock = true,
+                duration_ms = start.elapsed().as_millis(),
+                "tailscale_http"
+            );
             return Ok(resp);
         }
         let resp = self
@@ -163,11 +174,27 @@ impl TailscaleClient {
             .context("HTTP request failed")?;
         let status = resp.status().as_u16();
         let body = resp.text().unwrap_or_default();
+        info!(
+            method = "GET",
+            path = path,
+            status = status,
+            duration_ms = start.elapsed().as_millis(),
+            "tailscale_http"
+        );
         Ok(HttpResponse { status, body })
     }
 
     fn delete(&self, path: &str) -> Result<HttpResponse> {
+        let start = Instant::now();
         if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
+            info!(
+                method = "DELETE",
+                path = path,
+                status = resp.status,
+                mock = true,
+                duration_ms = start.elapsed().as_millis(),
+                "tailscale_http"
+            );
             return Ok(resp);
         }
         let resp = self
@@ -178,12 +205,28 @@ impl TailscaleClient {
             .context("HTTP request failed")?;
         let status = resp.status().as_u16();
         let body = resp.text().unwrap_or_default();
+        info!(
+            method = "DELETE",
+            path = path,
+            status = status,
+            duration_ms = start.elapsed().as_millis(),
+            "tailscale_http"
+        );
         Ok(HttpResponse { status, body })
     }
 
     fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
+        let start = Instant::now();
         let request_body = serde_json::to_string(body)?;
         if let Some(resp) = self.maybe_mock("POST", path, Some(&request_body))? {
+            info!(
+                method = "POST",
+                path = path,
+                status = resp.status,
+                mock = true,
+                duration_ms = start.elapsed().as_millis(),
+                "tailscale_http"
+            );
             return Ok(resp);
         }
         let resp = self
@@ -195,6 +238,13 @@ impl TailscaleClient {
             .context("HTTP request failed")?;
         let status = resp.status().as_u16();
         let body = resp.text().unwrap_or_default();
+        info!(
+            method = "POST",
+            path = path,
+            status = status,
+            duration_ms = start.elapsed().as_millis(),
+            "tailscale_http"
+        );
         Ok(HttpResponse { status, body })
     }
 

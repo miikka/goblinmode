@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
+use tracing::{info, warn};
 
 use crate::cmd::down;
 use crate::config;
@@ -22,9 +23,11 @@ pub struct Env {
 /// Ensure the dev environment is running, provisioning if needed.
 /// Returns connection info.
 pub fn ensure_running(reset: bool) -> Result<Env> {
+    info!(reset = reset, "up_ensure_running_start");
     // 1. Detect project root
     let project = project::detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
+    info!(project = %project.name, root = %project.root.display(), "project_detected");
 
     // 2. Load config
     let cfg = config::load_config()?;
@@ -37,8 +40,14 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 
     // 4. Check existing state
     if let Some(existing) = state::load_state(&project.id)? {
+        info!(
+            server_id = existing.server_id,
+            snapshot_id = ?existing.snapshot_id,
+            "existing_state_found"
+        );
         if reset {
             println!("--reset: destroying existing VM...");
+            info!("reset_requested_teardown_existing");
             down::teardown(&project, &existing, &cfg)?;
         } else {
             // 4a. Check for snapshot restore
@@ -62,6 +71,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 
                 match client.get_server_status(existing.server_id)? {
                     Some((status, ip)) if status == "running" => {
+                        info!(server_id = existing.server_id, ip = %ip, "existing_server_running");
                         println!("running");
                         let username = existing.username.clone();
                         wait_for_ssh(&username, &ip)?;
@@ -99,6 +109,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         });
                     }
                     Some((status, _)) => {
+                        info!(server_id = existing.server_id, status = %status, "existing_server_not_running");
                         println!("{}", status);
                         println!(
                             "Server is not running (status: {}). Creating a new one.",
@@ -106,6 +117,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         );
                     }
                     None => {
+                        warn!(server_id = existing.server_id, "existing_server_missing");
                         println!("not found");
                         println!("Server no longer exists. Creating a new one.");
                     }
@@ -147,6 +159,11 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         "Creating server '{}' (type: {})...",
         server_name, project_config.server_type
     );
+    info!(
+        server_name = %server_name,
+        server_type = %project_config.server_type,
+        "creating_server"
+    );
     let (server_id, initial_ip) = client.create_server(
         &server_name,
         &project_config.server_type,
@@ -159,6 +176,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         "  Server created (id: {}), waiting for it to start...",
         server_id
     );
+    info!(server_id = server_id, ip = %initial_ip, "server_created");
 
     // 6. Save state immediately so Ctrl-C doesn't orphan the server
     let project_state = state::ProjectState {
@@ -175,6 +193,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     // 7. Poll until running
     let ip = client.wait_for_server(server_id)?;
     println!("  Server running at {}", ip);
+    info!(server_id = server_id, ip = %ip, "server_running");
 
     // Update state with final IP
     let project_state = state::ProjectState {
@@ -219,8 +238,10 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 }
 
 pub fn run(reset: bool) -> Result<()> {
+    info!(reset = reset, "up_command_start");
     let env = ensure_running(reset)?;
     println!("SSH ready: ssh {}@{}", env.username, env.hostname);
+    info!(username = %env.username, hostname = %env.hostname, "up_command_ready");
     Ok(())
 }
 
@@ -420,6 +441,7 @@ fn restore_from_snapshot(
     let current_provisioning = current_provisioning_config(project, cfg, project_config);
 
     println!("Restoring from snapshot (image: {})...", snapshot_id);
+    info!(snapshot_id = snapshot_id, "restore_from_snapshot_start");
 
     let server_name = if existing.hostname.is_empty() {
         format!("gob-{}", project.name)
@@ -450,6 +472,7 @@ fn restore_from_snapshot(
         "  Server created (id: {}), waiting for it to start...",
         server_id
     );
+    info!(server_id = server_id, "snapshot_server_created");
 
     // Save state immediately so Ctrl-C doesn't orphan the server
     let project_state = state::ProjectState {
@@ -465,6 +488,7 @@ fn restore_from_snapshot(
 
     let ip = client.wait_for_server(server_id)?;
     println!("  Server running at {}", ip);
+    info!(server_id = server_id, ip = %ip, "snapshot_server_running");
 
     // Update state with final IP
     let project_state = state::ProjectState {
@@ -539,11 +563,12 @@ fn restore_from_snapshot(
 fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for SSH... ");
     io::stdout().flush()?;
+    info!(username = username, ip = ip, "wait_for_ssh_start");
 
     let max_attempts = 60; // 2 minutes max
     let target = format!("{}@{}", username, ip);
 
-    for _ in 0..max_attempts {
+    for attempt in 1..=max_attempts {
         let result = Command::new("ssh")
             .args([
                 "-o",
@@ -560,12 +585,14 @@ fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
         if let Ok(output) = result {
             if output.status.success() {
                 println!("ok");
+                info!(attempt = attempt, "wait_for_ssh_success");
                 return Ok(());
             }
         }
         std::thread::sleep(Duration::from_secs(2));
     }
 
+    warn!(ip = ip, max_attempts = max_attempts, "wait_for_ssh_timeout");
     anyhow::bail!("Timed out waiting for SSH on {}", ip);
 }
 
@@ -828,6 +855,7 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
 fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for cloud-init... ");
     io::stdout().flush()?;
+    info!(username = username, ip = ip, "wait_for_cloud_init_start");
 
     let output = Command::new("ssh")
         .args([
@@ -844,6 +872,7 @@ fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
 
     if output.status.success() || stdout.contains("status: done") {
         println!("done");
+        info!("wait_for_cloud_init_done");
     } else {
         let msg = if stderr.trim().is_empty() {
             stdout.trim().to_string()
@@ -884,9 +913,24 @@ fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
 }
 
 fn run_remote_status(target: &str, remote_cmd: &str) -> io::Result<std::process::ExitStatus> {
-    Command::new("ssh")
+    let status = Command::new("ssh")
         .args(["-o", "StrictHostKeyChecking=accept-new", target, remote_cmd])
-        .status()
+        .status();
+    match &status {
+        Ok(exit) => info!(
+            target = target,
+            remote_cmd = remote_cmd,
+            code = ?exit.code(),
+            "run_remote_status"
+        ),
+        Err(err) => warn!(
+            target = target,
+            remote_cmd = remote_cmd,
+            error = %err,
+            "run_remote_status_failed"
+        ),
+    }
+    status
 }
 
 fn reconcile_tailscale_serve_with<F>(ports: &[u16], run_remote: &mut F)
