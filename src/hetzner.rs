@@ -2,12 +2,38 @@ use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 const BASE_URL: &str = "https://api.hetzner.cloud/v1";
 
 pub struct HetznerClient {
     client: Client,
     token: String,
+    base_url: String,
+    #[cfg(test)]
+    mock_calls: Option<Arc<Mutex<VecDeque<MockCall>>>>,
+}
+
+struct HttpResponse {
+    status: u16,
+    body: String,
+}
+
+fn is_success(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct MockCall {
+    method: String,
+    path: String,
+    status: u16,
+    body: String,
+    body_contains: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,28 +98,113 @@ impl HetznerClient {
         Self {
             client: Client::new(),
             token,
+            base_url: BASE_URL.to_string(),
+            #[cfg(test)]
+            mock_calls: None,
         }
     }
 
-    fn get(&self, path: &str) -> Result<reqwest::blocking::Response> {
+    #[cfg(test)]
+    fn with_base_url(token: String, base_url: String) -> Self {
+        Self {
+            client: Client::new(),
+            token,
+            base_url,
+            mock_calls: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_mock_calls(token: String, base_url: String, calls: Vec<MockCall>) -> Self {
+        let mut client = Self::with_base_url(token, base_url);
+        client.mock_calls = Some(Arc::new(Mutex::new(calls.into())));
+        client
+    }
+
+    #[cfg(test)]
+    fn maybe_mock(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Option<HttpResponse>> {
+        let Some(calls) = &self.mock_calls else {
+            return Ok(None);
+        };
+        let mut calls = calls.lock().unwrap();
+        let call = calls
+            .pop_front()
+            .unwrap_or_else(|| panic!("unexpected request: {method} {path}"));
+        assert_eq!(call.method, method);
+        assert_eq!(call.path, path);
+        if let Some(fragment) = call.body_contains {
+            let req_body = body.unwrap_or("");
+            assert!(
+                req_body.contains(&fragment),
+                "request body missing fragment `{fragment}`: {req_body}"
+            );
+        }
+        Ok(Some(HttpResponse {
+            status: call.status,
+            body: call.body,
+        }))
+    }
+
+    #[cfg(not(test))]
+    fn maybe_mock(
+        &self,
+        _method: &str,
+        _path: &str,
+        _body: Option<&str>,
+    ) -> Result<Option<HttpResponse>> {
+        Ok(None)
+    }
+
+    fn get(&self, path: &str) -> Result<HttpResponse> {
+        if let Some(resp) = self.maybe_mock("GET", path, None)? {
+            return Ok(resp);
+        }
         let resp = self
             .client
-            .get(format!("{}{}", BASE_URL, path))
+            .get(format!("{}{}", self.base_url, path))
             .bearer_auth(&self.token)
             .send()
             .context("HTTP request failed")?;
-        Ok(resp)
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
     }
 
-    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<reqwest::blocking::Response> {
+    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
+        let request_body = serde_json::to_string(body)?;
+        if let Some(resp) = self.maybe_mock("POST", path, Some(&request_body))? {
+            return Ok(resp);
+        }
         let resp = self
             .client
-            .post(format!("{}{}", BASE_URL, path))
+            .post(format!("{}{}", self.base_url, path))
             .bearer_auth(&self.token)
             .json(body)
             .send()
             .context("HTTP request failed")?;
-        Ok(resp)
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
+    }
+
+    fn delete(&self, path: &str) -> Result<HttpResponse> {
+        if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
+            return Ok(resp);
+        }
+        let resp = self
+            .client
+            .delete(format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.token)
+            .send()
+            .context("HTTP request failed")?;
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
     }
 
     /// Create a server. Returns (server_id, ipv4).
@@ -119,13 +230,12 @@ impl HetznerClient {
         };
         let resp = self.post_json("/servers", &req)?;
 
-        if !resp.status().is_success() && resp.status().as_u16() != 201 {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to create server ({}): {}", status, body);
+        if !is_success(resp.status) && resp.status != 201 {
+            bail!("Failed to create server ({}): {}", resp.status, resp.body);
         }
 
-        let created: ServerResponse = resp.json().context("Failed to parse server response")?;
+        let created: ServerResponse =
+            serde_json::from_str(&resp.body).context("Failed to parse server response")?;
         let id = created.server.id;
         let ip = created.server.public_net.ipv4.ip.clone();
         Ok((id, ip))
@@ -135,10 +245,11 @@ impl HetznerClient {
     pub fn wait_for_server(&self, server_id: u64) -> Result<String> {
         loop {
             let resp = self.get(&format!("/servers/{}", server_id))?;
-            if !resp.status().is_success() {
-                bail!("Failed to get server status: {}", resp.status());
+            if !is_success(resp.status) {
+                bail!("Failed to get server status: {}", resp.status);
             }
-            let server: ServerResponse = resp.json().context("Failed to parse server response")?;
+            let server: ServerResponse =
+                serde_json::from_str(&resp.body).context("Failed to parse server response")?;
 
             match server.server.status.as_str() {
                 "running" => {
@@ -159,20 +270,12 @@ impl HetznerClient {
 
     /// Delete a server.
     pub fn delete_server(&self, server_id: u64) -> Result<()> {
-        let resp = self
-            .client
-            .delete(format!("{}/servers/{}", BASE_URL, server_id))
-            .bearer_auth(&self.token)
-            .send()
-            .context("HTTP request failed")?;
-
-        if resp.status().as_u16() == 404 {
+        let resp = self.delete(&format!("/servers/{}", server_id))?;
+        if resp.status == 404 {
             bail!("Server {} not found", server_id);
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to delete server ({}): {}", status, body);
+        if !is_success(resp.status) {
+            bail!("Failed to delete server ({}): {}", resp.status, resp.body);
         }
         Ok(())
     }
@@ -180,10 +283,11 @@ impl HetznerClient {
     /// Find an SSH key by name, returns its ID if found.
     pub fn find_ssh_key_by_name(&self, name: &str) -> Result<Option<u64>> {
         let resp = self.get("/ssh_keys")?;
-        if !resp.status().is_success() {
-            bail!("Failed to list SSH keys: {}", resp.status());
+        if !is_success(resp.status) {
+            bail!("Failed to list SSH keys: {}", resp.status);
         }
-        let keys: SshKeysResponse = resp.json().context("Failed to parse SSH keys response")?;
+        let keys: SshKeysResponse =
+            serde_json::from_str(&resp.body).context("Failed to parse SSH keys response")?;
         Ok(keys
             .ssh_keys
             .into_iter()
@@ -200,12 +304,11 @@ impl HetznerClient {
                 "public_key": public_key
             }),
         )?;
-        if !resp.status().is_success() && resp.status().as_u16() != 201 {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to create SSH key ({}): {}", status, body);
+        if !is_success(resp.status) && resp.status != 201 {
+            bail!("Failed to create SSH key ({}): {}", resp.status, resp.body);
         }
-        let created: SshKeyResponse = resp.json().context("Failed to parse SSH key response")?;
+        let created: SshKeyResponse =
+            serde_json::from_str(&resp.body).context("Failed to parse SSH key response")?;
         Ok(created.ssh_key.id)
     }
 
@@ -223,10 +326,8 @@ impl HetznerClient {
             &format!("/servers/{}/actions/shutdown", server_id),
             &serde_json::json!({}),
         )?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to shutdown server ({}): {}", status, body);
+        if !is_success(resp.status) {
+            bail!("Failed to shutdown server ({}): {}", resp.status, resp.body);
         }
         Ok(())
     }
@@ -235,10 +336,11 @@ impl HetznerClient {
     pub fn wait_for_server_off(&self, server_id: u64) -> Result<()> {
         loop {
             let resp = self.get(&format!("/servers/{}", server_id))?;
-            if !resp.status().is_success() {
-                bail!("Failed to get server status: {}", resp.status());
+            if !is_success(resp.status) {
+                bail!("Failed to get server status: {}", resp.status);
             }
-            let server: ServerResponse = resp.json().context("Failed to parse server response")?;
+            let server: ServerResponse =
+                serde_json::from_str(&resp.body).context("Failed to parse server response")?;
             if server.server.status == "off" {
                 return Ok(());
             }
@@ -258,14 +360,11 @@ impl HetznerClient {
                 }
             }),
         )?;
-        if !resp.status().is_success() && resp.status().as_u16() != 201 {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to create image ({}): {}", status, body);
+        if !is_success(resp.status) && resp.status != 201 {
+            bail!("Failed to create image ({}): {}", resp.status, resp.body);
         }
-        let body: serde_json::Value = resp
-            .json()
-            .context("Failed to parse create_image response")?;
+        let body: serde_json::Value =
+            serde_json::from_str(&resp.body).context("Failed to parse create_image response")?;
         let image_id = body["image"]["id"]
             .as_u64()
             .context("Missing image id in create_image response")?;
@@ -276,10 +375,11 @@ impl HetznerClient {
     pub fn wait_for_image(&self, image_id: u64) -> Result<()> {
         loop {
             let resp = self.get(&format!("/images/{}", image_id))?;
-            if !resp.status().is_success() {
-                bail!("Failed to get image status: {}", resp.status());
+            if !is_success(resp.status) {
+                bail!("Failed to get image status: {}", resp.status);
             }
-            let body: serde_json::Value = resp.json().context("Failed to parse image response")?;
+            let body: serde_json::Value =
+                serde_json::from_str(&resp.body).context("Failed to parse image response")?;
             let status = body["image"]["status"].as_str().unwrap_or("unknown");
             if status == "available" {
                 return Ok(());
@@ -291,10 +391,11 @@ impl HetznerClient {
     /// List all snapshots with the managed-by=goblinmode label.
     pub fn list_goblinmode_snapshots(&self) -> Result<Vec<SnapshotInfo>> {
         let resp = self.get("/images?type=snapshot&label_selector=managed-by%3Dgoblinmode")?;
-        if !resp.status().is_success() {
-            bail!("Failed to list images: {}", resp.status());
+        if !is_success(resp.status) {
+            bail!("Failed to list images: {}", resp.status);
         }
-        let body: serde_json::Value = resp.json().context("Failed to parse images response")?;
+        let body: serde_json::Value =
+            serde_json::from_str(&resp.body).context("Failed to parse images response")?;
         let images = body["images"].as_array().context("Missing images array")?;
         let mut result = Vec::new();
         for img in images {
@@ -314,16 +415,9 @@ impl HetznerClient {
 
     /// Delete an image/snapshot.
     pub fn delete_image(&self, image_id: u64) -> Result<()> {
-        let resp = self
-            .client
-            .delete(format!("{}/images/{}", BASE_URL, image_id))
-            .bearer_auth(&self.token)
-            .send()
-            .context("HTTP request failed")?;
-        if !resp.status().is_success() && resp.status().as_u16() != 404 {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to delete image ({}): {}", status, body);
+        let resp = self.delete(&format!("/images/{}", image_id))?;
+        if !is_success(resp.status) && resp.status != 404 {
+            bail!("Failed to delete image ({}): {}", resp.status, resp.body);
         }
         Ok(())
     }
@@ -331,10 +425,11 @@ impl HetznerClient {
     /// List all servers with the managed-by=goblinmode label.
     pub fn list_goblinmode_servers(&self) -> Result<Vec<ServerInfo>> {
         let resp = self.get("/servers?label_selector=managed-by%3Dgoblinmode")?;
-        if !resp.status().is_success() {
-            bail!("Failed to list servers: {}", resp.status());
+        if !is_success(resp.status) {
+            bail!("Failed to list servers: {}", resp.status);
         }
-        let body: ServersResponse = resp.json().context("Failed to parse servers response")?;
+        let body: ServersResponse =
+            serde_json::from_str(&resp.body).context("Failed to parse servers response")?;
         Ok(body
             .servers
             .into_iter()
@@ -350,13 +445,14 @@ impl HetznerClient {
     /// Check if a server still exists and is running.
     pub fn get_server_status(&self, server_id: u64) -> Result<Option<(String, String)>> {
         let resp = self.get(&format!("/servers/{}", server_id))?;
-        if resp.status().as_u16() == 404 {
+        if resp.status == 404 {
             return Ok(None);
         }
-        if !resp.status().is_success() {
-            bail!("Failed to get server status: {}", resp.status());
+        if !is_success(resp.status) {
+            bail!("Failed to get server status: {}", resp.status);
         }
-        let server: ServerResponse = resp.json().context("Failed to parse server response")?;
+        let server: ServerResponse =
+            serde_json::from_str(&resp.body).context("Failed to parse server response")?;
         Ok(Some((
             server.server.status,
             server.server.public_net.ipv4.ip,
@@ -375,4 +471,207 @@ pub struct SnapshotInfo {
     pub id: u64,
     pub description: String,
     pub created: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn call(method: &str, path: &str, status: u16, body: &str) -> MockCall {
+        MockCall {
+            method: method.to_string(),
+            path: path.to_string(),
+            status,
+            body: body.to_string(),
+            body_contains: None,
+        }
+    }
+
+    #[test]
+    fn create_server_success() {
+        let mut c = call(
+            "POST",
+            "/servers",
+            201,
+            r#"{"server":{"id":42,"name":"gob-x","status":"running","public_net":{"ipv4":{"ip":"1.2.3.4"}}}}"#,
+        );
+        c.body_contains = Some(r#""managed-by":"goblinmode""#.to_string());
+        let client =
+            HetznerClient::with_mock_calls("token".to_string(), "mock://".to_string(), vec![c]);
+
+        let (id, ip) = client
+            .create_server(
+                "gob-x",
+                "cx23",
+                "debian-13",
+                "hel1",
+                Some("cloud"),
+                Some(vec![1]),
+            )
+            .unwrap();
+        assert_eq!(id, 42);
+        assert_eq!(ip, "1.2.3.4");
+    }
+
+    #[test]
+    fn create_server_error_includes_body() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call("POST", "/servers", 400, r#"{"error":"bad request"}"#)],
+        );
+        let err = client
+            .create_server("gob-x", "cx23", "debian-13", "hel1", None, None)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("bad request"));
+    }
+
+    #[test]
+    fn create_server_parse_error() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call("POST", "/servers", 201, r#"{"not_server":true}"#)],
+        );
+        let err = client
+            .create_server("gob-x", "cx23", "debian-13", "hel1", None, None)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Failed to parse server response"));
+    }
+
+    #[test]
+    fn wait_for_server_returns_ip_when_running() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/servers/42",
+                200,
+                r#"{"server":{"id":42,"name":"gob-x","status":"running","public_net":{"ipv4":{"ip":"5.6.7.8"}}}}"#,
+            )],
+        );
+        let ip = client.wait_for_server(42).unwrap();
+        assert_eq!(ip, "5.6.7.8");
+    }
+
+    #[test]
+    fn wait_for_server_unexpected_status_errors() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/servers/42",
+                200,
+                r#"{"server":{"id":42,"name":"gob-x","status":"off","public_net":{"ipv4":{"ip":"5.6.7.8"}}}}"#,
+            )],
+        );
+        let err = client.wait_for_server(42).unwrap_err();
+        assert!(format!("{err:#}").contains("unexpected status"));
+    }
+
+    #[test]
+    fn delete_server_404_errors() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call("DELETE", "/servers/99", 404, "{}")],
+        );
+        let err = client.delete_server(99).unwrap_err();
+        assert!(format!("{err:#}").contains("not found"));
+    }
+
+    #[test]
+    fn ensure_ssh_key_uses_existing_key() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/ssh_keys",
+                200,
+                r#"{"ssh_keys":[{"id":777,"name":"goblinmode"}]}"#,
+            )],
+        );
+        let id = client
+            .ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA")
+            .unwrap();
+        assert_eq!(id, 777);
+    }
+
+    #[test]
+    fn ensure_ssh_key_creates_when_missing() {
+        let mut create = call(
+            "POST",
+            "/ssh_keys",
+            201,
+            r#"{"ssh_key":{"id":888,"name":"goblinmode"}}"#,
+        );
+        create.body_contains = Some(r#""name":"goblinmode""#.to_string());
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call("GET", "/ssh_keys", 200, r#"{"ssh_keys":[]}"#), create],
+        );
+        let id = client
+            .ensure_ssh_key("goblinmode", "ssh-ed25519 AAAA")
+            .unwrap();
+        assert_eq!(id, 888);
+    }
+
+    #[test]
+    fn get_server_status_404_returns_none() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call("GET", "/servers/555", 404, "{}")],
+        );
+        let status = client.get_server_status(555).unwrap();
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn list_servers_and_snapshots_parse() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![
+                call(
+                    "GET",
+                    "/servers?label_selector=managed-by%3Dgoblinmode",
+                    200,
+                    r#"{"servers":[{"id":1,"name":"gob-a","status":"running","public_net":{"ipv4":{"ip":"10.0.0.1"}}}]}"#,
+                ),
+                call(
+                    "GET",
+                    "/images?type=snapshot&label_selector=managed-by%3Dgoblinmode",
+                    200,
+                    r#"{"images":[{"id":2,"description":"snap","created":"2026-02-20T00:00:00Z"},{"id":0,"description":"skip","created":"x"}]}"#,
+                ),
+            ],
+        );
+
+        let servers = client.list_goblinmode_servers().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "gob-a");
+
+        let snapshots = client.list_goblinmode_snapshots().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, 2);
+    }
+
+    #[test]
+    fn wait_for_image_returns_when_available() {
+        let client = HetznerClient::with_mock_calls(
+            "token".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/images/2",
+                200,
+                r#"{"image":{"status":"available"}}"#,
+            )],
+        );
+        client.wait_for_image(2).unwrap();
+    }
 }
