@@ -24,7 +24,6 @@ pub struct Env {
 /// Returns connection info.
 #[instrument(level = "info", skip_all, fields(reset = reset))]
 pub fn ensure_running(reset: bool) -> Result<Env> {
-    info!(reset = reset, "up_ensure_running_start");
     // 1. Detect project root
     let project = project::detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
@@ -240,7 +239,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 
 #[instrument(level = "info", skip_all, fields(reset = reset))]
 pub fn run(reset: bool) -> Result<()> {
-    info!(reset = reset, "up_command_start");
     let env = ensure_running(reset)?;
     println!("SSH ready: ssh {}@{}", env.username, env.hostname);
     info!(username = %env.username, hostname = %env.hostname, "up_command_ready");
@@ -448,7 +446,6 @@ fn restore_from_snapshot(
     let current_provisioning = current_provisioning_config(project, cfg, project_config);
 
     println!("Restoring from snapshot (image: {})...", snapshot_id);
-    info!(snapshot_id = snapshot_id, "restore_from_snapshot_start");
 
     let server_name = if existing.hostname.is_empty() {
         format!("gob-{}", project.name)
@@ -571,7 +568,6 @@ fn restore_from_snapshot(
 fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for SSH... ");
     io::stdout().flush()?;
-    info!(username = username, ip = ip, "wait_for_ssh_start");
 
     let max_attempts = 60; // 2 minutes max
     let target = format!("{}@{}", username, ip);
@@ -877,7 +873,6 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
 fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
     print!("Waiting for cloud-init... ");
     io::stdout().flush()?;
-    info!(username = username, ip = ip, "wait_for_cloud_init_start");
 
     let output = Command::new("ssh")
         .args([
