@@ -1,12 +1,39 @@
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 const BASE_URL: &str = "https://api.tailscale.com/api/v2";
 
 pub struct TailscaleClient {
     client: Client,
     api_key: String,
+    base_url: String,
+    #[cfg(test)]
+    mock_calls: Option<Arc<Mutex<VecDeque<MockCall>>>>,
+}
+
+struct HttpResponse {
+    status: u16,
+    body: String,
+}
+
+fn is_success(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct MockCall {
+    method: String,
+    path: String,
+    status: u16,
+    body: String,
+    body_contains: Option<String>,
+    body_not_contains: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,7 +52,72 @@ impl TailscaleClient {
         Self {
             client: Client::new(),
             api_key,
+            base_url: BASE_URL.to_string(),
+            #[cfg(test)]
+            mock_calls: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_base_url(api_key: String, base_url: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            base_url,
+            mock_calls: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_mock_calls(api_key: String, base_url: String, calls: Vec<MockCall>) -> Self {
+        let mut client = Self::with_base_url(api_key, base_url);
+        client.mock_calls = Some(Arc::new(Mutex::new(calls.into())));
+        client
+    }
+
+    #[cfg(test)]
+    fn maybe_mock(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Option<HttpResponse>> {
+        let Some(calls) = &self.mock_calls else {
+            return Ok(None);
+        };
+        let mut calls = calls.lock().unwrap();
+        let call = calls
+            .pop_front()
+            .unwrap_or_else(|| panic!("unexpected request: {method} {path}"));
+        assert_eq!(call.method, method);
+        assert_eq!(call.path, path);
+        let req_body = body.unwrap_or("");
+        if let Some(fragment) = call.body_contains {
+            assert!(
+                req_body.contains(&fragment),
+                "request body missing fragment `{fragment}`: {req_body}"
+            );
+        }
+        if let Some(fragment) = call.body_not_contains {
+            assert!(
+                !req_body.contains(&fragment),
+                "request body unexpectedly contains `{fragment}`: {req_body}"
+            );
+        }
+        Ok(Some(HttpResponse {
+            status: call.status,
+            body: call.body,
+        }))
+    }
+
+    #[cfg(not(test))]
+    fn maybe_mock(
+        &self,
+        _method: &str,
+        _path: &str,
+        _body: Option<&str>,
+    ) -> Result<Option<HttpResponse>> {
+        Ok(None)
     }
 
     /// Delete a device from the tailnet by its hostname.
@@ -59,22 +151,67 @@ impl TailscaleClient {
             .collect())
     }
 
-    fn list_devices(&self) -> Result<Vec<Device>> {
+    fn get(&self, path: &str) -> Result<HttpResponse> {
+        if let Some(resp) = self.maybe_mock("GET", path, None)? {
+            return Ok(resp);
+        }
         let resp = self
             .client
-            .get(format!("{}/tailnet/-/devices", BASE_URL))
+            .get(format!("{}{}", self.base_url, path))
             .basic_auth(&self.api_key, Option::<&str>::None)
             .send()
+            .context("HTTP request failed")?;
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
+    }
+
+    fn delete(&self, path: &str) -> Result<HttpResponse> {
+        if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
+            return Ok(resp);
+        }
+        let resp = self
+            .client
+            .delete(format!("{}{}", self.base_url, path))
+            .basic_auth(&self.api_key, Option::<&str>::None)
+            .send()
+            .context("HTTP request failed")?;
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
+    }
+
+    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
+        let request_body = serde_json::to_string(body)?;
+        if let Some(resp) = self.maybe_mock("POST", path, Some(&request_body))? {
+            return Ok(resp);
+        }
+        let resp = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .basic_auth(&self.api_key, Option::<&str>::None)
+            .json(body)
+            .send()
+            .context("HTTP request failed")?;
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
+    }
+
+    fn list_devices(&self) -> Result<Vec<Device>> {
+        let resp = self
+            .get("/tailnet/-/devices")
             .context("Failed to list Tailscale devices")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to list Tailscale devices ({}): {}", status, body);
+        if !is_success(resp.status) {
+            bail!(
+                "Failed to list Tailscale devices ({}): {}",
+                resp.status,
+                resp.body
+            );
         }
 
-        let devices: DevicesResponse = resp
-            .json()
+        let devices: DevicesResponse = serde_json::from_str(&resp.body)
             .context("Failed to parse Tailscale devices response")?;
 
         Ok(devices.devices)
@@ -90,16 +227,15 @@ impl TailscaleClient {
 
     pub fn delete_device_by_id(&self, device_id: &str) -> Result<()> {
         let resp = self
-            .client
-            .delete(format!("{}/device/{}", BASE_URL, device_id))
-            .basic_auth(&self.api_key, Option::<&str>::None)
-            .send()
+            .delete(&format!("/device/{}", device_id))
             .context("Failed to delete Tailscale device")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to delete Tailscale device ({}): {}", status, body);
+        if !is_success(resp.status) {
+            bail!(
+                "Failed to delete Tailscale device ({}): {}",
+                resp.status,
+                resp.body
+            );
         }
 
         Ok(())
@@ -165,23 +301,136 @@ impl TailscaleClient {
         };
 
         let resp = self
-            .client
-            .post(format!("{}/tailnet/-/keys", BASE_URL))
-            .basic_auth(&self.api_key, Option::<&str>::None)
-            .json(&request)
-            .send()
+            .post_json("/tailnet/-/keys", &request)
             .context("Failed to create Tailscale auth key")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            bail!("Failed to create Tailscale auth key ({}): {}", status, body);
+        if !is_success(resp.status) {
+            bail!(
+                "Failed to create Tailscale auth key ({}): {}",
+                resp.status,
+                resp.body
+            );
         }
 
-        let response: CreateKeyResponse = resp
-            .json()
+        let response: CreateKeyResponse = serde_json::from_str(&resp.body)
             .context("Failed to parse Tailscale create key response")?;
 
         Ok(response.key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn call(method: &str, path: &str, status: u16, body: &str) -> MockCall {
+        MockCall {
+            method: method.to_string(),
+            path: path.to_string(),
+            status,
+            body: body.to_string(),
+            body_contains: None,
+            body_not_contains: None,
+        }
+    }
+
+    #[test]
+    fn list_gob_devices_filters_prefix() {
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/tailnet/-/devices",
+                200,
+                r#"{"devices":[{"id":"1","hostname":"gob-one"},{"id":"2","hostname":"laptop"}]}"#,
+            )],
+        );
+        let devices = client.list_gob_devices().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].hostname, "gob-one");
+    }
+
+    #[test]
+    fn delete_device_by_hostname_deletes_when_found() {
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![
+                call(
+                    "GET",
+                    "/tailnet/-/devices",
+                    200,
+                    r#"{"devices":[{"id":"dev-1","hostname":"gob-one"}]}"#,
+                ),
+                call("DELETE", "/device/dev-1", 200, "{}"),
+            ],
+        );
+        client.delete_device_by_hostname("gob-one").unwrap();
+    }
+
+    #[test]
+    fn delete_device_by_hostname_noop_when_missing() {
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![call(
+                "GET",
+                "/tailnet/-/devices",
+                200,
+                r#"{"devices":[{"id":"dev-1","hostname":"something-else"}]}"#,
+            )],
+        );
+        client.delete_device_by_hostname("gob-one").unwrap();
+    }
+
+    #[test]
+    fn delete_device_by_id_error_contains_body() {
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![call("DELETE", "/device/dev-1", 500, r#"{"error":"boom"}"#)],
+        );
+        let err = client.delete_device_by_id("dev-1").unwrap_err();
+        assert!(format!("{err:#}").contains("boom"));
+    }
+
+    #[test]
+    fn create_auth_key_with_tags() {
+        let mut c = call("POST", "/tailnet/-/keys", 200, r#"{"key":"tskey-auth-123"}"#);
+        c.body_contains = Some(r#""tags":["tag:gob"]"#.to_string());
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![c],
+        );
+        let key = client
+            .create_auth_key(&["tag:gob".to_string()])
+            .unwrap();
+        assert_eq!(key, "tskey-auth-123");
+    }
+
+    #[test]
+    fn create_auth_key_without_tags_omits_tags_field() {
+        let mut c = call("POST", "/tailnet/-/keys", 200, r#"{"key":"tskey-auth-123"}"#);
+        c.body_contains = Some(r#""expirySeconds":300"#.to_string());
+        c.body_not_contains = Some(r#""tags":"#.to_string());
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![c],
+        );
+        let key = client.create_auth_key(&[]).unwrap();
+        assert_eq!(key, "tskey-auth-123");
+    }
+
+    #[test]
+    fn create_auth_key_parse_error() {
+        let client = TailscaleClient::with_mock_calls(
+            "api-key".to_string(),
+            "mock://".to_string(),
+            vec![call("POST", "/tailnet/-/keys", 200, r#"{"not_key":true}"#)],
+        );
+        let err = client.create_auth_key(&[]).unwrap_err();
+        assert!(format!("{err:#}").contains("Failed to parse Tailscale create key response"));
     }
 }
