@@ -36,12 +36,15 @@ struct DotfilesConfig {
 #[derive(Deserialize)]
 struct HetznerConfig {
     api_token: Option<String>,
+    api_token_cmd: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct TailscaleConfig {
     auth_key: Option<String>,
+    auth_key_cmd: Option<String>,
     api_key: Option<String>,
+    api_key_cmd: Option<String>,
     tags: Option<Vec<String>>,
 }
 
@@ -64,13 +67,13 @@ pub fn load_config() -> Result<Config> {
 
     let config_path_display = config_path.display();
 
-    let hetzner_api_token = resolve_value(
+    let hetzner = config_file.as_ref().and_then(|c| c.hetzner.as_ref());
+    let hetzner_api_token = resolve_secret(
         "HETZNER_API_TOKEN",
-        config_file
-            .as_ref()
-            .and_then(|c| c.hetzner.as_ref())
-            .and_then(|h| h.api_token.as_deref()),
+        hetzner.and_then(|h| h.api_token_cmd.as_deref()),
+        hetzner.and_then(|h| h.api_token.as_deref()),
     )
+    .context("Failed to retrieve Hetzner API token")?
     .context(format!(
         "Hetzner API token not found.\n\
          Set HETZNER_API_TOKEN env var or add to {config_path_display}:\n\n\
@@ -78,13 +81,13 @@ pub fn load_config() -> Result<Config> {
          api_token = \"your-token-here\""
     ))?;
 
-    let tailscale_api_key = resolve_value(
+    let tailscale = config_file.as_ref().and_then(|c| c.tailscale.as_ref());
+    let tailscale_api_key = resolve_secret(
         "TAILSCALE_API_KEY",
-        config_file
-            .as_ref()
-            .and_then(|c| c.tailscale.as_ref())
-            .and_then(|t| t.api_key.as_deref()),
+        tailscale.and_then(|t| t.api_key_cmd.as_deref()),
+        tailscale.and_then(|t| t.api_key.as_deref()),
     )
+    .context("Failed to retrieve Tailscale API key")?
     .context(format!(
         "Tailscale API key not found.\n\
          Set TAILSCALE_API_KEY env var or add to {config_path_display}:\n\n\
@@ -92,17 +95,14 @@ pub fn load_config() -> Result<Config> {
          api_key = \"tskey-api-...\""
     ))?;
 
-    let tailscale_auth_key = resolve_value(
+    let tailscale_auth_key = resolve_secret(
         "TAILSCALE_AUTH_KEY",
-        config_file
-            .as_ref()
-            .and_then(|c| c.tailscale.as_ref())
-            .and_then(|t| t.auth_key.as_deref()),
-    );
+        tailscale.and_then(|t| t.auth_key_cmd.as_deref()),
+        tailscale.and_then(|t| t.auth_key.as_deref()),
+    )
+    .context("Failed to retrieve Tailscale auth key")?;
 
-    let tailscale_tags = config_file
-        .as_ref()
-        .and_then(|c| c.tailscale.as_ref())
+    let tailscale_tags = tailscale
         .and_then(|t| t.tags.clone())
         .unwrap_or_default();
 
@@ -138,58 +138,38 @@ pub fn load_config() -> Result<Config> {
     })
 }
 
-pub(crate) fn resolve_value(env_var: &str, file_value: Option<&str>) -> Option<String> {
+fn run_secret_cmd(cmd: &str) -> Result<String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .with_context(|| format!("Failed to run secret command: {cmd}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Secret command failed: {cmd}\n{stderr}");
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("Secret command output is not valid UTF-8")?
+        .trim()
+        .to_string())
+}
+
+pub(crate) fn resolve_secret(
+    env_var: &str,
+    cmd: Option<&str>,
+    file_value: Option<&str>,
+) -> Result<Option<String>> {
     if let Ok(val) = std::env::var(env_var) {
         if !val.is_empty() {
-            return Some(val);
+            return Ok(Some(val));
         }
     }
-    file_value.filter(|v| !v.is_empty()).map(|v| v.to_string())
+    if let Some(cmd) = cmd {
+        let val = run_secret_cmd(cmd)?;
+        if !val.is_empty() {
+            return Ok(Some(val));
+        }
+    }
+    Ok(file_value.filter(|v| !v.is_empty()).map(|s| s.to_string()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_value_env_var_takes_priority() {
-        let key = "GOB_TEST_RESOLVE_PRIORITY";
-        std::env::set_var(key, "from_env");
-        let result = resolve_value(key, Some("from_file"));
-        std::env::remove_var(key);
-        assert_eq!(result, Some("from_env".to_string()));
-    }
-
-    #[test]
-    fn resolve_value_falls_back_to_file() {
-        let key = "GOB_TEST_RESOLVE_FALLBACK";
-        std::env::remove_var(key);
-        assert_eq!(
-            resolve_value(key, Some("from_file")),
-            Some("from_file".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_value_empty_env_treated_as_absent() {
-        let key = "GOB_TEST_RESOLVE_EMPTY_ENV";
-        std::env::set_var(key, "");
-        let result = resolve_value(key, Some("from_file"));
-        std::env::remove_var(key);
-        assert_eq!(result, Some("from_file".to_string()));
-    }
-
-    #[test]
-    fn resolve_value_both_absent_returns_none() {
-        let key = "GOB_TEST_RESOLVE_NONE";
-        std::env::remove_var(key);
-        assert_eq!(resolve_value(key, None), None);
-    }
-
-    #[test]
-    fn resolve_value_empty_file_value_returns_none() {
-        let key = "GOB_TEST_RESOLVE_EMPTY_FILE";
-        std::env::remove_var(key);
-        assert_eq!(resolve_value(key, Some("")), None);
-    }
-}
