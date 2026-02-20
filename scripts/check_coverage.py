@@ -24,7 +24,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BASELINE = ".config/coverage-baseline.json"
+DEFAULT_BASELINE = f".config/coverage-baseline-{sys.platform}.json"
 
 
 def parse_args():
