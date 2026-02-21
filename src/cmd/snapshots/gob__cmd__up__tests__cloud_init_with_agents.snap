@@ -1,6 +1,5 @@
 ---
 source: src/cmd/up.rs
-assertion_line: 839
 expression: output
 ---
 #cloud-config
@@ -22,6 +21,8 @@ packages:
   - tmux
   - mosh
   - just
+  - socat
+  - bubblewrap
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config

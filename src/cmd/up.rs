@@ -1092,7 +1092,9 @@ packages:
   - zsh
   - tmux
   - mosh
-  - just{configurable_packages}{extra_packages}
+  - just
+  - socat
+  - bubblewrap{configurable_packages}{extra_packages}
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config

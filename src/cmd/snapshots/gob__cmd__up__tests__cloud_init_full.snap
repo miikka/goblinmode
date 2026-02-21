@@ -1,6 +1,5 @@
 ---
 source: src/cmd/up.rs
-assertion_line: 847
 expression: output
 ---
 #cloud-config
@@ -22,6 +21,8 @@ packages:
   - tmux
   - mosh
   - just
+  - socat
+  - bubblewrap
   - nodejs
   - build-essential
   - rustup
