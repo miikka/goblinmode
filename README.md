@@ -2,6 +2,21 @@
 
 CLI tool (`gob`) for managing ephemeral Hetzner dev VMs with Tailscale networking.
 
+## Debug Traces
+
+Use `--trace` to write structured JSON logs for debugging command execution:
+
+```bash
+gob up --trace
+```
+
+This writes a file like `gob-trace-<timestamp>.jsonl` in the current directory.
+You can also choose the output path:
+
+```bash
+gob up --trace /tmp/gob-up-trace.jsonl
+```
+
 ## Configuration
 
 Config file: `~/.config/goblinmode/config.toml`
