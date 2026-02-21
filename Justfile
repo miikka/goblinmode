@@ -1,6 +1,8 @@
 test:
     cargo llvm-cov nextest
 
+check: ci
+
 ci:
     cargo fmt --check
     cargo clippy
