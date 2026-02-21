@@ -114,8 +114,7 @@ commit it to the repository. It lets each project customize the VM it gets.
 # See https://www.hetzner.com/cloud for available types.
 server_type = "cx33"
 
-# TCP ports forwarded from localhost on the VM to localhost on your machine
-# via the SSH connection (optional).
+# Ports exposed via `tailscale serve` on the VM (optional).
 serve_ports = [3000, 8080]
 ```
 
@@ -124,4 +123,4 @@ serve_ports = [3000, 8080]
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `server_type` | string | `"cx23"` | Hetzner server type for the VM |
-| `serve_ports` | integer[] | `[]` | Ports forwarded over SSH from the VM to localhost |
+| `serve_ports` | integer[] | `[]` | Ports exposed via `tailscale serve` on the VM |
