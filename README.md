@@ -116,6 +116,10 @@ server_type = "cx33"
 
 # Ports exposed via `tailscale serve` on the VM (optional).
 serve_ports = [3000, 8080]
+
+# Extra APT packages installed on this project's VM, in addition to
+# the packages listed in the user config (optional).
+packages = ["nodejs", "postgresql-client"]
 ```
 
 #### Reference
@@ -124,3 +128,4 @@ serve_ports = [3000, 8080]
 |---|---|---|---|
 | `server_type` | string | `"cx23"` | Hetzner server type for the VM |
 | `serve_ports` | integer[] | `[]` | Ports exposed via `tailscale serve` on the VM |
+| `packages` | string[] | `[]` | Extra APT packages installed on the VM, merged with user config `vm.packages` |

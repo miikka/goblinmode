@@ -151,8 +151,8 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         ssh_pubkey.trim(),
         &tailscale_auth_key,
         is_rust,
-        &cfg.vm_packages,
-        &cfg.coding_agents,
+        &current_runtime.vm_packages,
+        &current_runtime.coding_agents,
     );
     let server_name = format!("gob-{}", project.name);
     println!(
@@ -250,10 +250,22 @@ fn current_runtime_config(
     project_config: &project_config::ProjectConfig,
 ) -> state::AppliedRuntimeConfig {
     state::AppliedRuntimeConfig {
-        vm_packages: cfg.vm_packages.clone(),
+        vm_packages: merge_packages(&cfg.vm_packages, &project_config.packages),
         coding_agents: cfg.coding_agents.clone(),
         serve_ports: project_config.serve_ports.clone(),
     }
+}
+
+/// Combine user-level and project-level package lists.
+/// Project packages that are already in the user list are not duplicated.
+fn merge_packages(user: &[String], project: &[String]) -> Vec<String> {
+    let mut result = user.to_vec();
+    for pkg in project {
+        if !result.contains(pkg) {
+            result.push(pkg.clone());
+        }
+    }
+    result
 }
 
 fn current_provisioning_config(
@@ -1244,11 +1256,25 @@ mod tests {
         let project_cfg = project_config::ProjectConfig {
             serve_ports: vec![3000, 8080],
             server_type: "cx42".to_string(),
+            packages: vec![],
         };
         let runtime = current_runtime_config(&cfg, &project_cfg);
         assert_eq!(runtime.vm_packages, vec!["jq", "ripgrep"]);
         assert_eq!(runtime.coding_agents, vec!["claude-code"]);
         assert_eq!(runtime.serve_ports, vec![3000, 8080]);
+    }
+
+    #[test]
+    fn current_runtime_config_merges_project_packages() {
+        let cfg = test_config(); // vm_packages = ["jq", "ripgrep"]
+        let project_cfg = project_config::ProjectConfig {
+            serve_ports: vec![],
+            server_type: "cx23".to_string(),
+            packages: vec!["nodejs".to_string(), "jq".to_string()], // jq is a duplicate
+        };
+        let runtime = current_runtime_config(&cfg, &project_cfg);
+        // jq appears in both lists but must not be duplicated
+        assert_eq!(runtime.vm_packages, vec!["jq", "ripgrep", "nodejs"]);
     }
 
     #[test]
@@ -1259,6 +1285,7 @@ mod tests {
         let project_cfg = project_config::ProjectConfig {
             serve_ports: vec![],
             server_type: "cx42".to_string(),
+            packages: vec![],
         };
         let provisioning = current_provisioning_config(
             &test_project(dir.path().to_path_buf()),
@@ -1359,6 +1386,28 @@ mod tests {
         assert_eq!(calls[2], "sudo tailscale serve reset");
         assert_eq!(calls[3], "sudo tailscale serve --bg 3000");
         assert_eq!(calls.len(), 4);
+    }
+
+    #[test]
+    fn merge_packages_deduplicates_and_preserves_order() {
+        let user = vec!["jq".to_string(), "ripgrep".to_string()];
+        let project = vec!["nodejs".to_string(), "jq".to_string()];
+        assert_eq!(
+            merge_packages(&user, &project),
+            vec!["jq", "ripgrep", "nodejs"]
+        );
+    }
+
+    #[test]
+    fn merge_packages_empty_project_returns_user_list() {
+        let user = vec!["jq".to_string()];
+        assert_eq!(merge_packages(&user, &[]), vec!["jq"]);
+    }
+
+    #[test]
+    fn merge_packages_empty_user_returns_project_list() {
+        let project = vec!["nodejs".to_string()];
+        assert_eq!(merge_packages(&[], &project), vec!["nodejs"]);
     }
 
     #[test]

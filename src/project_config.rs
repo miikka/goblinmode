@@ -12,6 +12,10 @@ pub struct ProjectConfig {
     pub serve_ports: Vec<u16>,
     #[serde(default = "default_server_type")]
     pub server_type: String,
+    /// Extra APT packages installed on this project's VM, in addition to
+    /// the packages listed in the user config.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 impl Default for ProjectConfig {
@@ -19,6 +23,7 @@ impl Default for ProjectConfig {
         ProjectConfig {
             serve_ports: Vec::new(),
             server_type: default_server_type(),
+            packages: Vec::new(),
         }
     }
 }
@@ -42,6 +47,7 @@ mod tests {
         let config = ProjectConfig::default();
         assert_eq!(config.server_type, "cx23");
         assert!(config.serve_ports.is_empty());
+        assert!(config.packages.is_empty());
     }
 
     #[test]
@@ -50,6 +56,7 @@ mod tests {
         let config = load_project_config(dir.path()).unwrap();
         assert_eq!(config.server_type, "cx23");
         assert!(config.serve_ports.is_empty());
+        assert!(config.packages.is_empty());
     }
 
     #[test]
@@ -79,6 +86,20 @@ mod tests {
         .unwrap();
         let config = load_project_config(dir.path()).unwrap();
         assert_eq!(config.serve_ports, vec![3000, 8080]);
+    }
+
+    #[test]
+    fn packages_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("goblinmode.toml"),
+            "packages = [\"nodejs\", \"python3\"]\n",
+        )
+        .unwrap();
+        let config = load_project_config(dir.path()).unwrap();
+        assert_eq!(config.packages, vec!["nodejs", "python3"]);
     }
 
     #[test]
