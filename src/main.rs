@@ -1,6 +1,7 @@
 mod cmd;
 mod config;
 mod hetzner;
+mod packages;
 mod project;
 mod project_config;
 mod state;

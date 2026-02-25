@@ -138,7 +138,6 @@ mod tests {
                 dotfiles_repo: None,
                 dotfiles_install: None,
                 vm_packages: vec![],
-                coding_agents: vec![],
             })
         }
 

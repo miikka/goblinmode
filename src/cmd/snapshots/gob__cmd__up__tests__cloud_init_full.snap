@@ -32,7 +32,5 @@ runcmd:
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --auth-key=tskey-auth-xxx --ssh
-  - su - testuser -c "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
-  - su - testuser -c "/home/testuser/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data jj-cli"
   - su - testuser -c 'rustup default stable'
-  - su - testuser -c 'curl -fsSL https://claude.ai/install.sh | bash'
+  - su - testuser -c 'curl -fsSL https://claude.ai/install.sh | sh'

@@ -8,6 +8,7 @@ use tracing::{info, instrument, warn};
 use crate::cmd::down;
 use crate::config;
 use crate::hetzner::HetznerClient;
+use crate::packages::PackageSpec;
 use crate::project;
 use crate::project_config;
 use crate::state;
@@ -151,8 +152,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         ssh_pubkey.trim(),
         &tailscale_auth_key,
         is_rust,
-        &current_runtime.vm_packages,
-        &current_runtime.coding_agents,
+        &current_runtime.packages,
     );
     let server_name = format!("gob-{}", project.name);
     println!(
@@ -249,20 +249,31 @@ fn current_runtime_config(
     cfg: &config::Config,
     project_config: &project_config::ProjectConfig,
 ) -> state::AppliedRuntimeConfig {
+    let project_specs: Vec<PackageSpec> = project_config
+        .packages
+        .iter()
+        .map(|n| PackageSpec::Apt { name: n.clone() })
+        .chain(
+            project_config
+                .cargo_packages
+                .iter()
+                .map(|n| PackageSpec::CargoBinstall { name: n.clone() }),
+        )
+        .collect();
     state::AppliedRuntimeConfig {
-        vm_packages: merge_packages(&cfg.vm_packages, &project_config.packages),
-        coding_agents: cfg.coding_agents.clone(),
+        packages: merge_package_specs(&cfg.vm_packages, &project_specs),
         serve_ports: project_config.serve_ports.clone(),
+        ..Default::default()
     }
 }
 
-/// Combine user-level and project-level package lists.
-/// Project packages that are already in the user list are not duplicated.
-fn merge_packages(user: &[String], project: &[String]) -> Vec<String> {
+/// Combine user-level and project-level package specs.
+/// Project specs whose name already appears in the user list are not duplicated.
+fn merge_package_specs(user: &[PackageSpec], project: &[PackageSpec]) -> Vec<PackageSpec> {
     let mut result = user.to_vec();
-    for pkg in project {
-        if !result.contains(pkg) {
-            result.push(pkg.clone());
+    for spec in project {
+        if !result.iter().any(|s| s.name() == spec.name()) {
+            result.push(spec.clone());
         }
     }
     result
@@ -333,48 +344,29 @@ fn provisioning_change_messages(
 
 #[derive(Debug, PartialEq, Eq)]
 struct RuntimeConfigDelta {
-    added_packages: Vec<String>,
-    removed_packages: Vec<String>,
-    added_agents: Vec<String>,
-    removed_agents: Vec<String>,
+    added: Vec<PackageSpec>,
+    removed: Vec<PackageSpec>,
 }
 
 fn runtime_config_delta(
     previous: Option<&state::AppliedRuntimeConfig>,
     current: &state::AppliedRuntimeConfig,
 ) -> RuntimeConfigDelta {
-    let previous_packages = previous.map(|c| c.vm_packages.as_slice()).unwrap_or(&[]);
-    let previous_agents = previous.map(|c| c.coding_agents.as_slice()).unwrap_or(&[]);
+    let previous_packages = previous.map(|c| c.packages.as_slice()).unwrap_or(&[]);
 
-    let removed_packages = previous_packages
+    let removed = previous_packages
         .iter()
-        .filter(|p| !current.vm_packages.contains(*p))
+        .filter(|p| !current.packages.iter().any(|c| c.name() == p.name()))
         .cloned()
         .collect();
-    let added_packages = current
-        .vm_packages
+    let added = current
+        .packages
         .iter()
-        .filter(|p| !previous_packages.contains(*p))
-        .cloned()
-        .collect();
-    let removed_agents = previous_agents
-        .iter()
-        .filter(|a| !current.coding_agents.contains(*a))
-        .cloned()
-        .collect();
-    let added_agents = current
-        .coding_agents
-        .iter()
-        .filter(|a| !previous_agents.contains(*a))
+        .filter(|p| !previous_packages.iter().any(|prev| prev.name() == p.name()))
         .cloned()
         .collect();
 
-    RuntimeConfigDelta {
-        added_packages,
-        removed_packages,
-        added_agents,
-        removed_agents,
-    }
+    RuntimeConfigDelta { added, removed }
 }
 
 fn reconcile_runtime_config(
@@ -401,40 +393,38 @@ fn reconcile_runtime_config_with<F>(
 {
     let delta = runtime_config_delta(previous, current);
 
-    if !delta.added_packages.is_empty() {
-        println!("Installing newly configured VM packages...");
-        let install_cmd = format!(
-            "sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {}",
-            delta.added_packages.join(" ")
-        );
-        if !run_remote(&install_cmd) {
-            eprintln!(
-                "Warning: failed to install some configured VM packages: {}",
-                delta.added_packages.join(", ")
-            );
+    let mut non_reconcilable: Vec<&PackageSpec> = Vec::new();
+    for spec in &delta.added {
+        match spec.runtime_install_cmd(username) {
+            Some(cmd) => {
+                println!("Installing newly configured package '{}'...", spec.name());
+                if !run_remote(&cmd) {
+                    eprintln!("Warning: failed to install package '{}'", spec.name());
+                }
+            }
+            None => non_reconcilable.push(spec),
         }
     }
-    if !delta.removed_packages.is_empty() {
+    if !non_reconcilable.is_empty() {
         eprintln!(
-            "Warning: removed vm.packages are not auto-uninstalled: {}",
-            delta.removed_packages.join(", ")
+            "Warning: the following packages require `gob up --reset` to install (cargo-binstall): {}",
+            non_reconcilable
+                .iter()
+                .map(|s| s.name())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 
-    for agent in &delta.added_agents {
-        if let Some(cmd) = coding_agent_install_cmd(agent, username) {
-            println!("Installing newly configured coding agent '{}'...", agent);
-            if !run_remote(&cmd) {
-                eprintln!("Warning: failed to install coding agent '{}'", agent);
-            }
-        } else {
-            eprintln!("Warning: unknown coding_agent '{}', skipping", agent);
-        }
-    }
-    if !delta.removed_agents.is_empty() {
+    if !delta.removed.is_empty() {
         eprintln!(
-            "Warning: removed vm.coding_agents are not auto-uninstalled: {}",
-            delta.removed_agents.join(", ")
+            "Warning: removed packages are not auto-uninstalled: {}",
+            delta
+                .removed
+                .iter()
+                .map(|s| s.name())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 
@@ -998,18 +988,6 @@ fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
     });
 }
 
-fn coding_agent_install_cmd(agent: &str, username: &str) -> Option<String> {
-    match agent {
-        "claude-code" => Some(format!(
-            "su - {username} -c 'curl -fsSL https://claude.ai/install.sh | bash'"
-        )),
-        "opencode" => Some(format!(
-            "su - {username} -c 'curl -fsSL https://opencode.ai/install | sh'"
-        )),
-        _ => None,
-    }
-}
-
 /// Resolve the Tailscale auth key: use the configured key if set, otherwise
 /// create a one-time preauthorized key via the Tailscale API.
 #[instrument(level = "info", skip_all)]
@@ -1059,8 +1037,7 @@ pub(crate) fn build_cloud_init(
     ssh_pubkey: &str,
     tailscale_auth_key: &str,
     is_rust: bool,
-    vm_packages: &[String],
-    coding_agents: &[String],
+    packages: &[PackageSpec],
 ) -> String {
     let extra_packages = if is_rust {
         "\n  - build-essential\n  - rustup"
@@ -1076,16 +1053,34 @@ pub(crate) fn build_cloud_init(
         Some(tz) => format!("\ntimezone: {tz}"),
         None => String::new(),
     };
-    let configurable_packages: String = vm_packages.iter().map(|p| format!("\n  - {p}")).collect();
 
-    // Accumulate runcmd entries for each coding agent (run as the provisioned user)
-    let mut agent_cmds = String::new();
+    // APT packages go into the `packages:` YAML list
+    let configurable_packages: String = packages
+        .iter()
+        .filter_map(|p| {
+            if let PackageSpec::Apt { name } = p {
+                Some(format!("\n  - {name}"))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    for agent in coding_agents {
-        if let Some(cmd) = coding_agent_install_cmd(agent, username) {
-            agent_cmds.push_str(&format!("\n  - {cmd}"));
-        } else {
-            eprintln!("Warning: unknown coding_agent '{}', skipping", agent);
+    // Non-APT packages go into `runcmd:`.
+    // If there are any CargoBinstall specs, bootstrap cargo-binstall first.
+    let has_cargo_binstall = packages
+        .iter()
+        .any(|p| matches!(p, PackageSpec::CargoBinstall { .. }));
+
+    let mut extra_cmds = String::new();
+    if has_cargo_binstall {
+        extra_cmds.push_str(&format!(
+            "\n  - su - {username} -c \"curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash\""
+        ));
+    }
+    for pkg in packages {
+        if let Some(cmd) = pkg.cloud_init_runcmd(username) {
+            extra_cmds.push_str(&format!("\n  - {cmd}"));
         }
     }
 
@@ -1115,9 +1110,7 @@ runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh
-  - su - {username} -c "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
-  - su - {username} -c "/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data jj-cli"{rust_cmds}{agent_cmds}
+  - tailscale up --auth-key={tailscale_auth_key} --ssh{rust_cmds}{extra_cmds}
 "#
     )
 }
@@ -1169,7 +1162,7 @@ mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
-    fn test_cloud_init(is_rust: bool, packages: &[String], agents: &[String]) -> String {
+    fn test_cloud_init(is_rust: bool, packages: &[PackageSpec]) -> String {
         // Pin timezone so snapshots are deterministic across machines
         std::env::set_var("TZ", "UTC");
         build_cloud_init(
@@ -1178,41 +1171,72 @@ mod tests {
             "tskey-auth-xxx",
             is_rust,
             packages,
-            agents,
         )
     }
 
     #[test]
     fn cloud_init_basic() {
-        let output = test_cloud_init(false, &[], &[]);
+        let output = test_cloud_init(false, &[]);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn cloud_init_with_rust() {
-        let output = test_cloud_init(true, &[], &[]);
+        let output = test_cloud_init(true, &[]);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn cloud_init_with_packages() {
-        let packages = vec!["nodejs".to_string(), "python3".to_string()];
-        let output = test_cloud_init(false, &packages, &[]);
+        let packages = vec![
+            PackageSpec::Apt {
+                name: "nodejs".to_string(),
+            },
+            PackageSpec::Apt {
+                name: "python3".to_string(),
+            },
+        ];
+        let output = test_cloud_init(false, &packages);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn cloud_init_with_agents() {
-        let agents = vec!["claude-code".to_string(), "opencode".to_string()];
-        let output = test_cloud_init(false, &[], &agents);
+        let packages = vec![
+            PackageSpec::CurlInstaller {
+                name: "claude-code".to_string(),
+                url: "https://claude.ai/install.sh".to_string(),
+            },
+            PackageSpec::CurlInstaller {
+                name: "opencode".to_string(),
+                url: "https://opencode.ai/install".to_string(),
+            },
+        ];
+        let output = test_cloud_init(false, &packages);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_cargo_packages() {
+        let packages = vec![PackageSpec::CargoBinstall {
+            name: "jj-cli".to_string(),
+        }];
+        let output = test_cloud_init(false, &packages);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn cloud_init_full() {
-        let packages = vec!["nodejs".to_string()];
-        let agents = vec!["claude-code".to_string()];
-        let output = test_cloud_init(true, &packages, &agents);
+        let packages = vec![
+            PackageSpec::Apt {
+                name: "nodejs".to_string(),
+            },
+            PackageSpec::CurlInstaller {
+                name: "claude-code".to_string(),
+                url: "https://claude.ai/install.sh".to_string(),
+            },
+        ];
+        let output = test_cloud_init(true, &packages);
         insta::assert_snapshot!(output);
     }
 
@@ -1237,8 +1261,18 @@ mod tests {
             tailscale_tags: vec![],
             dotfiles_repo: Some("git@example.com:dotfiles.git".to_string()),
             dotfiles_install: Some("./install.sh".to_string()),
-            vm_packages: vec!["jq".to_string(), "ripgrep".to_string()],
-            coding_agents: vec!["claude-code".to_string()],
+            vm_packages: vec![
+                PackageSpec::Apt {
+                    name: "jq".to_string(),
+                },
+                PackageSpec::Apt {
+                    name: "ripgrep".to_string(),
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+            ],
         }
     }
 
@@ -1257,24 +1291,56 @@ mod tests {
             serve_ports: vec![3000, 8080],
             server_type: "cx42".to_string(),
             packages: vec![],
+            cargo_packages: vec![],
         };
         let runtime = current_runtime_config(&cfg, &project_cfg);
-        assert_eq!(runtime.vm_packages, vec!["jq", "ripgrep"]);
-        assert_eq!(runtime.coding_agents, vec!["claude-code"]);
+        assert_eq!(
+            runtime.packages,
+            vec![
+                PackageSpec::Apt {
+                    name: "jq".to_string()
+                },
+                PackageSpec::Apt {
+                    name: "ripgrep".to_string()
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+            ]
+        );
         assert_eq!(runtime.serve_ports, vec![3000, 8080]);
     }
 
     #[test]
     fn current_runtime_config_merges_project_packages() {
-        let cfg = test_config(); // vm_packages = ["jq", "ripgrep"]
+        let cfg = test_config(); // vm_packages = [Apt("jq"), Apt("ripgrep"), CurlInstaller("claude-code")]
         let project_cfg = project_config::ProjectConfig {
             serve_ports: vec![],
             server_type: "cx23".to_string(),
             packages: vec!["nodejs".to_string(), "jq".to_string()], // jq is a duplicate
+            cargo_packages: vec![],
         };
         let runtime = current_runtime_config(&cfg, &project_cfg);
         // jq appears in both lists but must not be duplicated
-        assert_eq!(runtime.vm_packages, vec!["jq", "ripgrep", "nodejs"]);
+        assert_eq!(
+            runtime.packages,
+            vec![
+                PackageSpec::Apt {
+                    name: "jq".to_string()
+                },
+                PackageSpec::Apt {
+                    name: "ripgrep".to_string()
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+                PackageSpec::Apt {
+                    name: "nodejs".to_string()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -1286,6 +1352,7 @@ mod tests {
             serve_ports: vec![],
             server_type: "cx42".to_string(),
             packages: vec![],
+            cargo_packages: vec![],
         };
         let provisioning = current_provisioning_config(
             &test_project(dir.path().to_path_buf()),
@@ -1330,20 +1397,44 @@ mod tests {
     #[test]
     fn runtime_config_delta_tracks_added_and_removed_entries() {
         let previous = state::AppliedRuntimeConfig {
-            vm_packages: vec!["git".to_string(), "jq".to_string()],
-            coding_agents: vec!["claude-code".to_string()],
+            packages: vec![
+                PackageSpec::Apt {
+                    name: "git".to_string(),
+                },
+                PackageSpec::Apt {
+                    name: "jq".to_string(),
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+            ],
             serve_ports: vec![3000],
+            ..Default::default()
         };
         let current = state::AppliedRuntimeConfig {
-            vm_packages: vec!["jq".to_string(), "ripgrep".to_string()],
-            coding_agents: vec!["opencode".to_string()],
+            packages: vec![
+                PackageSpec::Apt {
+                    name: "jq".to_string(),
+                },
+                PackageSpec::Apt {
+                    name: "ripgrep".to_string(),
+                },
+                PackageSpec::CurlInstaller {
+                    name: "opencode".to_string(),
+                    url: "https://opencode.ai/install".to_string(),
+                },
+            ],
             serve_ports: vec![8080],
+            ..Default::default()
         };
         let delta = runtime_config_delta(Some(&previous), &current);
-        assert_eq!(delta.added_packages, vec!["ripgrep"]);
-        assert_eq!(delta.removed_packages, vec!["git"]);
-        assert_eq!(delta.added_agents, vec!["opencode"]);
-        assert_eq!(delta.removed_agents, vec!["claude-code"]);
+        assert_eq!(delta.added.len(), 2);
+        assert!(delta.added.iter().any(|s| s.name() == "ripgrep"));
+        assert!(delta.added.iter().any(|s| s.name() == "opencode"));
+        assert_eq!(delta.removed.len(), 2);
+        assert!(delta.removed.iter().any(|s| s.name() == "git"));
+        assert!(delta.removed.iter().any(|s| s.name() == "claude-code"));
     }
 
     #[test]
@@ -1366,14 +1457,27 @@ mod tests {
     #[test]
     fn reconcile_runtime_config_with_applies_additions_and_serve() {
         let previous = state::AppliedRuntimeConfig {
-            vm_packages: vec!["git".to_string()],
-            coding_agents: vec!["unknown-old".to_string()],
+            packages: vec![PackageSpec::Apt {
+                name: "git".to_string(),
+            }],
             serve_ports: vec![1234],
+            ..Default::default()
         };
         let current = state::AppliedRuntimeConfig {
-            vm_packages: vec!["git".to_string(), "jq".to_string()],
-            coding_agents: vec!["claude-code".to_string(), "unknown-new".to_string()],
+            packages: vec![
+                PackageSpec::Apt {
+                    name: "git".to_string(),
+                },
+                PackageSpec::Apt {
+                    name: "jq".to_string(),
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+            ],
             serve_ports: vec![3000],
+            ..Default::default()
         };
         let calls = RefCell::new(Vec::<String>::new());
         reconcile_runtime_config_with("alice", Some(&previous), &current, |cmd| {
@@ -1382,40 +1486,54 @@ mod tests {
         });
         let calls = calls.into_inner();
         assert!(calls[0].contains("apt-get install -y jq"));
-        assert!(calls[1].contains("curl -fsSL https://claude.ai/install.sh"));
+        assert!(calls[1].contains("claude.ai/install.sh"));
         assert_eq!(calls[2], "sudo tailscale serve reset");
         assert_eq!(calls[3], "sudo tailscale serve --bg 3000");
         assert_eq!(calls.len(), 4);
     }
 
     #[test]
-    fn merge_packages_deduplicates_and_preserves_order() {
-        let user = vec!["jq".to_string(), "ripgrep".to_string()];
-        let project = vec!["nodejs".to_string(), "jq".to_string()];
-        assert_eq!(
-            merge_packages(&user, &project),
-            vec!["jq", "ripgrep", "nodejs"]
-        );
+    fn merge_package_specs_deduplicates_and_preserves_order() {
+        let user = vec![
+            PackageSpec::Apt {
+                name: "jq".to_string(),
+            },
+            PackageSpec::Apt {
+                name: "ripgrep".to_string(),
+            },
+        ];
+        let project = vec![
+            PackageSpec::Apt {
+                name: "nodejs".to_string(),
+            },
+            PackageSpec::Apt {
+                name: "jq".to_string(),
+            },
+        ];
+        let result = merge_package_specs(&user, &project);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].name(), "jq");
+        assert_eq!(result[1].name(), "ripgrep");
+        assert_eq!(result[2].name(), "nodejs");
     }
 
     #[test]
-    fn merge_packages_empty_project_returns_user_list() {
-        let user = vec!["jq".to_string()];
-        assert_eq!(merge_packages(&user, &[]), vec!["jq"]);
+    fn merge_package_specs_empty_project_returns_user_list() {
+        let user = vec![PackageSpec::Apt {
+            name: "jq".to_string(),
+        }];
+        let result = merge_package_specs(&user, &[]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name(), "jq");
     }
 
     #[test]
-    fn merge_packages_empty_user_returns_project_list() {
-        let project = vec!["nodejs".to_string()];
-        assert_eq!(merge_packages(&[], &project), vec!["nodejs"]);
-    }
-
-    #[test]
-    fn coding_agent_install_cmd_supports_known_agents() {
-        let claude = coding_agent_install_cmd("claude-code", "alice").unwrap();
-        assert!(claude.contains("claude.ai/install.sh"));
-        let opencode = coding_agent_install_cmd("opencode", "alice").unwrap();
-        assert!(opencode.contains("opencode.ai/install"));
-        assert!(coding_agent_install_cmd("unknown", "alice").is_none());
+    fn merge_package_specs_empty_user_returns_project_list() {
+        let project = vec![PackageSpec::Apt {
+            name: "nodejs".to_string(),
+        }];
+        let result = merge_package_specs(&[], &project);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name(), "nodejs");
     }
 }

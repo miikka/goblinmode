@@ -2,14 +2,49 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
+use crate::packages::PackageSpec;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct AppliedRuntimeConfig {
     #[serde(default)]
+    pub packages: Vec<PackageSpec>,
+    /// Legacy field kept for reading old state files.  New state files omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vm_packages: Vec<String>,
-    #[serde(default)]
+    /// Legacy field kept for reading old state files.  New state files omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coding_agents: Vec<String>,
     #[serde(default)]
     pub serve_ports: Vec<u16>,
+}
+
+impl AppliedRuntimeConfig {
+    /// Migrate old `vm_packages`/`coding_agents` fields into the unified
+    /// `packages` field.  A no-op when `packages` is already populated.
+    pub fn migrate(self) -> Self {
+        if !self.packages.is_empty() {
+            return self;
+        }
+        if self.vm_packages.is_empty() && self.coding_agents.is_empty() {
+            return self;
+        }
+        let packages = self
+            .vm_packages
+            .iter()
+            .map(|n| PackageSpec::Apt { name: n.clone() })
+            .chain(
+                self.coding_agents
+                    .iter()
+                    .filter_map(|n| crate::packages::resolve_coding_agent(n)),
+            )
+            .collect();
+        Self {
+            packages,
+            vm_packages: Vec::new(),
+            coding_agents: Vec::new(),
+            serve_ports: self.serve_ports,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -61,8 +96,9 @@ pub fn load_state(project_id: &str) -> Result<Option<ProjectState>> {
     }
     let contents = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read state from {}", path.display()))?;
-    let state: ProjectState = serde_json::from_str(&contents)
+    let mut state: ProjectState = serde_json::from_str(&contents)
         .with_context(|| format!("Failed to parse state from {}", path.display()))?;
+    state.applied_runtime = state.applied_runtime.map(|r| r.migrate());
     Ok(Some(state))
 }
 
@@ -145,8 +181,7 @@ mod tests {
     #[test]
     fn applied_config_structs_default_empty() {
         let runtime = AppliedRuntimeConfig::default();
-        assert!(runtime.vm_packages.is_empty());
-        assert!(runtime.coding_agents.is_empty());
+        assert!(runtime.packages.is_empty());
         assert!(runtime.serve_ports.is_empty());
 
         let provisioning = AppliedProvisioningConfig::default();
@@ -154,5 +189,92 @@ mod tests {
         assert!(!provisioning.is_rust);
         assert!(provisioning.dotfiles_repo.is_none());
         assert!(provisioning.dotfiles_install.is_none());
+    }
+
+    #[test]
+    fn migrate_converts_old_vm_packages_and_agents() {
+        let old = AppliedRuntimeConfig {
+            packages: vec![],
+            vm_packages: vec!["vim".to_string(), "tmux".to_string()],
+            coding_agents: vec!["claude-code".to_string()],
+            serve_ports: vec![3000],
+        };
+        let migrated = old.migrate();
+        assert!(migrated.vm_packages.is_empty());
+        assert!(migrated.coding_agents.is_empty());
+        assert_eq!(migrated.serve_ports, vec![3000]);
+        assert_eq!(
+            migrated.packages,
+            vec![
+                PackageSpec::Apt {
+                    name: "vim".to_string()
+                },
+                PackageSpec::Apt {
+                    name: "tmux".to_string()
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn migrate_is_noop_when_packages_already_set() {
+        let existing = vec![PackageSpec::Apt {
+            name: "vim".to_string(),
+        }];
+        let config = AppliedRuntimeConfig {
+            packages: existing.clone(),
+            vm_packages: vec!["old".to_string()],
+            coding_agents: vec![],
+            serve_ports: vec![],
+        };
+        let migrated = config.migrate();
+        assert_eq!(migrated.packages, existing);
+    }
+
+    #[test]
+    fn migrate_skips_unknown_coding_agents() {
+        let old = AppliedRuntimeConfig {
+            packages: vec![],
+            vm_packages: vec![],
+            coding_agents: vec!["unknown-agent".to_string()],
+            serve_ports: vec![],
+        };
+        let migrated = old.migrate();
+        // unknown agents are silently dropped during migration
+        assert!(migrated.packages.is_empty());
+    }
+
+    #[test]
+    fn old_state_json_deserializes_and_migrates() {
+        // Simulates a state file written before the PackageSpec migration.
+        let json = r#"{
+            "server_id": 1,
+            "ipv4": "1.2.3.4",
+            "hostname": "gob-x",
+            "applied_runtime": {
+                "vm_packages": ["vim"],
+                "coding_agents": ["opencode"],
+                "serve_ports": []
+            }
+        }"#;
+        let mut state: ProjectState = serde_json::from_str(json).unwrap();
+        state.applied_runtime = state.applied_runtime.map(|r| r.migrate());
+        let runtime = state.applied_runtime.unwrap();
+        assert_eq!(
+            runtime.packages,
+            vec![
+                PackageSpec::Apt {
+                    name: "vim".to_string()
+                },
+                PackageSpec::CurlInstaller {
+                    name: "opencode".to_string(),
+                    url: "https://opencode.ai/install".to_string(),
+                },
+            ]
+        );
     }
 }
