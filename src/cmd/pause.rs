@@ -94,6 +94,17 @@ pub fn run() -> Result<()> {
     run_with(&deps)
 }
 
+/// Pause a running server: snapshot it, destroy the server, update state.
+/// Exposed for use by `gob down` (which pauses by default).
+pub fn pause(
+    project: &project::Project,
+    existing: state::ProjectState,
+    cfg: &config::Config,
+) -> Result<()> {
+    let mut actions = RealPauseActions::new(cfg);
+    pause_with(&mut actions, project, existing)
+}
+
 fn run_with<D: PauseDeps>(deps: &D) -> Result<()> {
     let project = deps.detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
