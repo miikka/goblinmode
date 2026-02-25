@@ -30,8 +30,12 @@ enum Commands {
         #[arg(long)]
         reset: bool,
     },
-    /// Destroy the development VM for the current project
-    Down,
+    /// Snapshot and pause the development VM (use --destroy to skip snapshotting)
+    Down {
+        /// Destroy the VM immediately without taking a snapshot first
+        #[arg(long)]
+        destroy: bool,
+    },
     /// Connect to the development VM with mosh
     Mosh,
     /// Open the remote project in Zed
@@ -61,7 +65,7 @@ fn main() -> anyhow::Result<()> {
 
     let result = match cli.command {
         Commands::Up { reset } => cmd::up::run(reset),
-        Commands::Down => cmd::down::run(),
+        Commands::Down { destroy } => cmd::down::run(destroy),
         Commands::Pause => cmd::pause::run(),
         Commands::Mosh => cmd::mosh::run(),
         Commands::Zed => cmd::zed::run(),
@@ -80,7 +84,7 @@ fn main() -> anyhow::Result<()> {
 fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Up { .. } => "up",
-        Commands::Down => "down",
+        Commands::Down { .. } => "down",
         Commands::Pause => "pause",
         Commands::Mosh => "mosh",
         Commands::Zed => "zed",

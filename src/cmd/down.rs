@@ -60,7 +60,7 @@ impl DownActions for RealDownActions {
     }
 }
 
-pub fn run() -> Result<()> {
+pub fn run(destroy: bool) -> Result<()> {
     // 1. Detect project root
     let project = project::detect_project()?;
     println!("Project: {} ({})", project.name, project.root.display());
@@ -74,7 +74,17 @@ pub fn run() -> Result<()> {
     // 3. Load config
     let cfg = config::load_config()?;
 
-    teardown(&project, &existing, &cfg)
+    // Default behaviour: pause (snapshot + destroy) to protect work.
+    // Fall back to teardown when --destroy is given, or when the server is
+    // already paused (server_id == 0) — there is nothing to snapshot in that
+    // case, so we just clean up state and any leftover snapshot image.
+    if !destroy && existing.server_id != 0 {
+        println!("Pausing VM (snapshotting before shutdown)...");
+        println!("Tip: use `gob down --destroy` to skip the snapshot.");
+        super::pause::pause(&project, existing, &cfg)
+    } else {
+        teardown(&project, &existing, &cfg)
+    }
 }
 
 /// Destroy all resources for a project. Does not bail if the server is already gone.
