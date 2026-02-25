@@ -2,6 +2,75 @@
 
 CLI tool (`gob`) for managing ephemeral Hetzner dev VMs with Tailscale networking.
 
+## Prerequisites
+
+- A [Hetzner Cloud](https://www.hetzner.com/cloud) account and API token
+- A [Tailscale](https://tailscale.com/) account and API key (+ optional auth key for automatic VM enrollment)
+- An SSH public key at `~/.ssh/id_ed25519.pub`
+- [mosh](https://mosh.org/) installed locally (for `gob mosh`)
+- Rust toolchain (to build from source)
+
+## Installation
+
+Build and install from source:
+
+```bash
+cargo install --path .
+```
+
+This puts the `gob` binary on your PATH.
+
+## Quick start
+
+1. Create the config file at `~/.config/goblinmode/config.toml` with your
+   credentials:
+
+   ```toml
+   [hetzner]
+   api_token = "hzn-..."
+
+   [tailscale]
+   api_key = "tskey-api-..."
+   auth_key = "tskey-auth-..."
+   ```
+
+2. `cd` into a Git project directory and spin up a VM:
+
+   ```bash
+   gob up       # provision a VM and sync the project
+   gob mosh     # connect to the VM
+   gob down     # snapshot and destroy the VM when done
+   ```
+
+See the [Configuration](#configuration) section below for all available
+options, including secret management via `_cmd` fields and environment
+variables.
+
+## Usage
+
+| Command | Description |
+|---|---|
+| `gob up` | Provision a VM (or reconnect to an existing one) and sync the project. Use `--reset` to recreate from scratch. |
+| `gob down` | Snapshot the VM and destroy the server. Use `--destroy` to skip the snapshot. |
+| `gob pause` | Snapshot the VM and destroy the server (resume later with `gob up`). |
+| `gob mosh` | Connect to the VM via mosh. |
+| `gob zed` | Open the remote project in Zed. |
+| `gob status` | Show the status of the development VM (alias: `gob ps`). |
+| `gob prune` | List and delete all goblinmode-managed servers on Hetzner. |
+
+### Lifecycle
+
+The typical workflow is:
+
+1. **`gob up`** — creates a Hetzner VM, installs dependencies via cloud-init,
+   joins your Tailscale network, and rsyncs your project to the VM.
+2. **`gob mosh`** or **`gob zed`** — connect and work on the remote VM.
+3. **`gob down`** — snapshots the VM so you can resume later, then destroys
+   the server to stop billing. Use `gob down --destroy` to skip the snapshot
+   if you don't need to resume.
+
+All commands use `--trace` for optional debug logging (see below).
+
 ## Debug Traces
 
 Use `--trace` to write structured JSON logs for debugging command execution:
