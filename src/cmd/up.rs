@@ -146,12 +146,11 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     // 6. Create server with cloud-init
     let username = whoami();
     let tailscale_auth_key = resolve_tailscale_auth_key(&cfg)?;
-    let is_rust = current_provisioning.is_rust;
     let user_data = build_cloud_init(
         &username,
         ssh_pubkey.trim(),
         &tailscale_auth_key,
-        is_rust,
+        &current_provisioning.toolchains,
         &current_runtime.packages,
     );
     let server_name = format!("gob-{}", project.name);
@@ -284,11 +283,17 @@ fn current_provisioning_config(
     cfg: &config::Config,
     project_config: &project_config::ProjectConfig,
 ) -> state::AppliedProvisioningConfig {
+    let toolchains = state::Toolchain::all()
+        .iter()
+        .filter(|t| t.detect(&project.root))
+        .cloned()
+        .collect();
     state::AppliedProvisioningConfig {
         server_type: project_config.server_type.clone(),
-        is_rust: project.root.join("Cargo.toml").exists(),
+        toolchains,
         dotfiles_repo: cfg.dotfiles_repo.clone(),
         dotfiles_install: cfg.dotfiles_install.clone(),
+        ..Default::default()
     }
 }
 
@@ -321,10 +326,10 @@ fn provisioning_change_messages(
             previous.server_type, current.server_type
         ));
     }
-    if previous.is_rust != current.is_rust {
+    if previous.toolchains != current.toolchains {
         changed.push(format!(
-            "rust project mode: {} -> {}",
-            previous.is_rust, current.is_rust
+            "toolchains: {:?} -> {:?}",
+            previous.toolchains, current.toolchains
         ));
     }
     if previous.dotfiles_repo != current.dotfiles_repo {
@@ -1036,19 +1041,19 @@ pub(crate) fn build_cloud_init(
     username: &str,
     ssh_pubkey: &str,
     tailscale_auth_key: &str,
-    is_rust: bool,
+    toolchains: &[state::Toolchain],
     packages: &[PackageSpec],
 ) -> String {
-    let extra_packages = if is_rust {
-        "\n  - build-essential\n  - rustup"
-    } else {
-        ""
-    };
-    let rust_cmds = if is_rust {
-        format!("\n  - su - {username} -c 'rustup default stable'")
-    } else {
-        String::new()
-    };
+    let toolchain_packages: String = toolchains
+        .iter()
+        .flat_map(|t| t.apt_packages())
+        .map(|p| format!("\n  - {p}"))
+        .collect();
+    let toolchain_cmds: String = toolchains
+        .iter()
+        .flat_map(|t| t.runcmds(username))
+        .map(|cmd| format!("\n  - {cmd}"))
+        .collect();
     let timezone_line = match detect_timezone() {
         Some(tz) => format!("\ntimezone: {tz}"),
         None => String::new(),
@@ -1104,13 +1109,13 @@ packages:
   - mosh
   - just
   - socat
-  - bubblewrap{configurable_packages}{extra_packages}
+  - bubblewrap{configurable_packages}{toolchain_packages}
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh{rust_cmds}{extra_cmds}
+  - tailscale up --auth-key={tailscale_auth_key} --ssh{toolchain_cmds}{extra_cmds}
 "#
     )
 }
@@ -1162,27 +1167,33 @@ mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
-    fn test_cloud_init(is_rust: bool, packages: &[PackageSpec]) -> String {
+    fn test_cloud_init(toolchains: &[state::Toolchain], packages: &[PackageSpec]) -> String {
         // Pin timezone so snapshots are deterministic across machines
         std::env::set_var("TZ", "UTC");
         build_cloud_init(
             "testuser",
             "ssh-ed25519 AAAA",
             "tskey-auth-xxx",
-            is_rust,
+            toolchains,
             packages,
         )
     }
 
     #[test]
     fn cloud_init_basic() {
-        let output = test_cloud_init(false, &[]);
+        let output = test_cloud_init(&[], &[]);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn cloud_init_with_rust() {
-        let output = test_cloud_init(true, &[]);
+        let output = test_cloud_init(&[state::Toolchain::Rust], &[]);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_python() {
+        let output = test_cloud_init(&[state::Toolchain::Python], &[]);
         insta::assert_snapshot!(output);
     }
 
@@ -1196,7 +1207,7 @@ mod tests {
                 name: "python3".to_string(),
             },
         ];
-        let output = test_cloud_init(false, &packages);
+        let output = test_cloud_init(&[], &packages);
         insta::assert_snapshot!(output);
     }
 
@@ -1212,7 +1223,7 @@ mod tests {
                 url: "https://opencode.ai/install".to_string(),
             },
         ];
-        let output = test_cloud_init(false, &packages);
+        let output = test_cloud_init(&[], &packages);
         insta::assert_snapshot!(output);
     }
 
@@ -1221,7 +1232,7 @@ mod tests {
         let packages = vec![PackageSpec::CargoBinstall {
             name: "jj-cli".to_string(),
         }];
-        let output = test_cloud_init(false, &packages);
+        let output = test_cloud_init(&[], &packages);
         insta::assert_snapshot!(output);
     }
 
@@ -1236,7 +1247,7 @@ mod tests {
                 url: "https://claude.ai/install.sh".to_string(),
             },
         ];
-        let output = test_cloud_init(true, &packages);
+        let output = test_cloud_init(&[state::Toolchain::Rust], &packages);
         insta::assert_snapshot!(output);
     }
 
@@ -1360,7 +1371,7 @@ mod tests {
             &project_cfg,
         );
         assert_eq!(provisioning.server_type, "cx42");
-        assert!(provisioning.is_rust);
+        assert!(provisioning.toolchains.contains(&state::Toolchain::Rust));
         assert_eq!(
             provisioning.dotfiles_repo,
             Some("git@example.com:dotfiles.git".to_string())
@@ -1372,23 +1383,40 @@ mod tests {
     }
 
     #[test]
+    fn current_provisioning_config_detects_python_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname=\"x\"\n").unwrap();
+        let cfg = test_config();
+        let project_cfg = project_config::ProjectConfig::default();
+        let provisioning = current_provisioning_config(
+            &test_project(dir.path().to_path_buf()),
+            &cfg,
+            &project_cfg,
+        );
+        assert!(provisioning.toolchains.contains(&state::Toolchain::Python));
+        assert!(!provisioning.toolchains.contains(&state::Toolchain::Rust));
+    }
+
+    #[test]
     fn provisioning_change_messages_reports_all_differences() {
         let previous = state::AppliedProvisioningConfig {
             server_type: "cx23".to_string(),
-            is_rust: false,
+            toolchains: vec![],
             dotfiles_repo: None,
             dotfiles_install: None,
+            ..Default::default()
         };
         let current = state::AppliedProvisioningConfig {
             server_type: "cx42".to_string(),
-            is_rust: true,
+            toolchains: vec![state::Toolchain::Rust],
             dotfiles_repo: Some("git@example.com:dotfiles.git".to_string()),
             dotfiles_install: Some("./install.sh".to_string()),
+            ..Default::default()
         };
         let changes = provisioning_change_messages(Some(&previous), &current);
         assert_eq!(changes.len(), 4);
         assert!(changes.iter().any(|c| c.contains("server_type")));
-        assert!(changes.iter().any(|c| c.contains("rust project mode")));
+        assert!(changes.iter().any(|c| c.contains("toolchains")));
         assert!(changes.iter().any(|c| c.contains("dotfiles.repo")));
         assert!(changes.iter().any(|c| c.contains("dotfiles.install")));
         assert!(provisioning_change_messages(None, &current).is_empty());

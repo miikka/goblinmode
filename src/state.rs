@@ -47,16 +47,78 @@ impl AppliedRuntimeConfig {
     }
 }
 
+/// A language toolchain to install on the VM during provisioning.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Toolchain {
+    Rust,
+    Python,
+}
+
+impl Toolchain {
+    /// All known toolchains, in detection order.
+    pub fn all() -> &'static [Toolchain] {
+        &[Toolchain::Rust, Toolchain::Python]
+    }
+
+    /// Returns true if this toolchain is detected in the given project root.
+    pub fn detect(&self, project_root: &std::path::Path) -> bool {
+        match self {
+            Toolchain::Rust => project_root.join("Cargo.toml").exists(),
+            Toolchain::Python => project_root.join("pyproject.toml").exists(),
+        }
+    }
+
+    /// APT packages that must be installed for this toolchain.
+    pub fn apt_packages(&self) -> &'static [&'static str] {
+        match self {
+            Toolchain::Rust => &["build-essential", "rustup"],
+            Toolchain::Python => &[],
+        }
+    }
+
+    /// cloud-init `runcmd` entries that set up this toolchain.
+    pub fn runcmds(&self, username: &str) -> Vec<String> {
+        match self {
+            Toolchain::Rust => vec![format!("su - {username} -c 'rustup default stable'")],
+            Toolchain::Python => vec![format!(
+                "su - {username} -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'"
+            )],
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct AppliedProvisioningConfig {
     #[serde(default)]
     pub server_type: String,
+    /// Toolchains detected and installed for this project.
     #[serde(default)]
+    pub toolchains: Vec<Toolchain>,
+    /// Legacy field kept for reading old state files. New state files omit it.
+    #[serde(default, skip_serializing)]
     pub is_rust: bool,
     #[serde(default)]
     pub dotfiles_repo: Option<String>,
     #[serde(default)]
     pub dotfiles_install: Option<String>,
+}
+
+impl AppliedProvisioningConfig {
+    /// Migrate old `is_rust` field into the unified `toolchains` field.
+    /// A no-op when `toolchains` is already populated or `is_rust` is false.
+    pub fn migrate(self) -> Self {
+        if !self.is_rust || self.toolchains.iter().any(|t| matches!(t, Toolchain::Rust)) {
+            return self;
+        }
+        let mut toolchains = self.toolchains.clone();
+        toolchains.push(Toolchain::Rust);
+        Self {
+            toolchains,
+            is_rust: false,
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,6 +161,7 @@ pub fn load_state(project_id: &str) -> Result<Option<ProjectState>> {
     let mut state: ProjectState = serde_json::from_str(&contents)
         .with_context(|| format!("Failed to parse state from {}", path.display()))?;
     state.applied_runtime = state.applied_runtime.map(|r| r.migrate());
+    state.applied_provisioning = state.applied_provisioning.map(|p| p.migrate());
     Ok(Some(state))
 }
 
@@ -186,7 +249,7 @@ mod tests {
 
         let provisioning = AppliedProvisioningConfig::default();
         assert!(provisioning.server_type.is_empty());
-        assert!(!provisioning.is_rust);
+        assert!(provisioning.toolchains.is_empty());
         assert!(provisioning.dotfiles_repo.is_none());
         assert!(provisioning.dotfiles_install.is_none());
     }
@@ -276,5 +339,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn migrate_provisioning_converts_is_rust_to_toolchain() {
+        let json = r#"{
+            "server_id": 1,
+            "ipv4": "1.2.3.4",
+            "hostname": "gob-x",
+            "applied_provisioning": {
+                "server_type": "cx23",
+                "is_rust": true
+            }
+        }"#;
+        let mut state: ProjectState = serde_json::from_str(json).unwrap();
+        state.applied_provisioning = state.applied_provisioning.map(|p| p.migrate());
+        let provisioning = state.applied_provisioning.unwrap();
+        assert_eq!(provisioning.toolchains, vec![Toolchain::Rust]);
     }
 }
