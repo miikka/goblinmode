@@ -64,6 +64,9 @@ packages = ["jq", "ripgrep", "tmux"]
 # Coding agents to install on every VM (optional).
 # Supported values: "claude-code", "opencode"
 coding_agents = ["claude-code"]
+
+# Extra packages to install via cargo-binstall on every VM (optional).
+cargo_packages = ["jj-cli"]
 ```
 
 #### Secrets (API tokens and keys)
@@ -99,6 +102,7 @@ Output is trimmed of leading/trailing whitespace.
 | `dotfiles.install` | string | no | Install script path relative to `~/dotfiles` |
 | `vm.packages` | string[] | no | Extra APT packages installed on the VM |
 | `vm.coding_agents` | string[] | no | Coding agents to install (`"claude-code"`, `"opencode"`) |
+| `vm.cargo_packages` | string[] | no | Extra packages installed via cargo-binstall (e.g. `"jj-cli"`) |
 
 \* At least one of the plain-text or `_cmd` variant is required.
 
@@ -120,6 +124,9 @@ serve_ports = [3000, 8080]
 # Extra APT packages installed on this project's VM, in addition to
 # the packages listed in the user config (optional).
 packages = ["nodejs", "postgresql-client"]
+
+# Extra cargo-binstall packages for this project's VM (optional).
+cargo_packages = ["git-absorb"]
 ```
 
 #### Reference
@@ -129,3 +136,4 @@ packages = ["nodejs", "postgresql-client"]
 | `server_type` | string | `"cx23"` | Hetzner server type for the VM |
 | `serve_ports` | integer[] | `[]` | Ports exposed via `tailscale serve` on the VM |
 | `packages` | string[] | `[]` | Extra APT packages installed on the VM, merged with user config `vm.packages` |
+| `cargo_packages` | string[] | `[]` | Extra packages installed via cargo-binstall, merged with user config `vm.cargo_packages` |

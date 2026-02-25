@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
+use tracing::warn;
+
+use crate::packages::{resolve_coding_agent, PackageSpec};
 
 pub struct Config {
     pub hetzner_api_token: String,
@@ -9,8 +12,7 @@ pub struct Config {
     pub tailscale_tags: Vec<String>,
     pub dotfiles_repo: Option<String>,
     pub dotfiles_install: Option<String>,
-    pub vm_packages: Vec<String>,
-    pub coding_agents: Vec<String>,
+    pub vm_packages: Vec<PackageSpec>,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +27,7 @@ struct ConfigFile {
 struct VmConfig {
     packages: Option<Vec<String>>,
     coding_agents: Option<Vec<String>>,
+    cargo_packages: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -115,17 +118,31 @@ fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
         .and_then(|d| d.install.clone())
         .filter(|v| !v.is_empty());
 
-    let vm_packages = config_file
-        .as_ref()
-        .and_then(|c| c.vm.as_ref())
-        .and_then(|v| v.packages.clone())
+    let vm = config_file.as_ref().and_then(|c| c.vm.as_ref());
+
+    let mut vm_packages: Vec<PackageSpec> = vm
+        .and_then(|v| v.packages.as_ref())
+        .map(|pkgs| {
+            pkgs.iter()
+                .map(|n| PackageSpec::Apt { name: n.clone() })
+                .collect()
+        })
         .unwrap_or_default();
 
-    let coding_agents = config_file
-        .as_ref()
-        .and_then(|c| c.vm.as_ref())
-        .and_then(|v| v.coding_agents.clone())
-        .unwrap_or_default();
+    if let Some(agents) = vm.and_then(|v| v.coding_agents.as_ref()) {
+        for name in agents {
+            match resolve_coding_agent(name) {
+                Some(spec) => vm_packages.push(spec),
+                None => warn!(agent = %name, "unknown coding_agent in config, skipping"),
+            }
+        }
+    }
+
+    if let Some(cargo_pkgs) = vm.and_then(|v| v.cargo_packages.as_ref()) {
+        for name in cargo_pkgs {
+            vm_packages.push(PackageSpec::CargoBinstall { name: name.clone() });
+        }
+    }
 
     Ok(Config {
         hetzner_api_token,
@@ -135,7 +152,6 @@ fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
         dotfiles_repo,
         dotfiles_install,
         vm_packages,
-        coding_agents,
     })
 }
 
@@ -240,7 +256,6 @@ mod tests {
         assert!(config.dotfiles_repo.is_none());
         assert!(config.dotfiles_install.is_none());
         assert!(config.vm_packages.is_empty());
-        assert!(config.coding_agents.is_empty());
     }
 
     #[test]
@@ -262,7 +277,8 @@ install = "./install.sh"
 
 [vm]
 packages = ["vim", "tmux"]
-coding_agents = ["claude"]
+coding_agents = ["claude-code"]
+cargo_packages = ["jj-cli"]
 "#;
         let path = write_temp_config(&dir, toml);
         let config = with_env_locked(
@@ -283,8 +299,24 @@ coding_agents = ["claude"]
             Some("git@github.com:user/dotfiles".to_string())
         );
         assert_eq!(config.dotfiles_install, Some("./install.sh".to_string()));
-        assert_eq!(config.vm_packages, vec!["vim", "tmux"]);
-        assert_eq!(config.coding_agents, vec!["claude"]);
+        assert_eq!(
+            config.vm_packages,
+            vec![
+                PackageSpec::Apt {
+                    name: "vim".to_string()
+                },
+                PackageSpec::Apt {
+                    name: "tmux".to_string()
+                },
+                PackageSpec::CurlInstaller {
+                    name: "claude-code".to_string(),
+                    url: "https://claude.ai/install.sh".to_string(),
+                },
+                PackageSpec::CargoBinstall {
+                    name: "jj-cli".to_string()
+                },
+            ]
+        );
     }
 
     #[test]
