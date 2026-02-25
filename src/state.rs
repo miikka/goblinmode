@@ -55,6 +55,26 @@ pub enum Toolchain {
     Python,
 }
 
+impl Toolchain {
+    /// APT packages that must be installed for this toolchain.
+    pub fn apt_packages(&self) -> &'static [&'static str] {
+        match self {
+            Toolchain::Rust => &["build-essential", "rustup"],
+            Toolchain::Python => &[],
+        }
+    }
+
+    /// cloud-init `runcmd` entries that set up this toolchain.
+    pub fn runcmds(&self, username: &str) -> Vec<String> {
+        match self {
+            Toolchain::Rust => vec![format!("su - {username} -c 'rustup default stable'")],
+            Toolchain::Python => vec![format!(
+                "su - {username} -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'"
+            )],
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct AppliedProvisioningConfig {
     #[serde(default)]

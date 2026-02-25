@@ -1046,27 +1046,16 @@ pub(crate) fn build_cloud_init(
     toolchains: &[state::Toolchain],
     packages: &[PackageSpec],
 ) -> String {
-    let is_rust = toolchains
+    let toolchain_packages: String = toolchains
         .iter()
-        .any(|t| matches!(t, state::Toolchain::Rust));
-    let is_python = toolchains
+        .flat_map(|t| t.apt_packages())
+        .map(|p| format!("\n  - {p}"))
+        .collect();
+    let toolchain_cmds: String = toolchains
         .iter()
-        .any(|t| matches!(t, state::Toolchain::Python));
-    let extra_packages = if is_rust {
-        "\n  - build-essential\n  - rustup"
-    } else {
-        ""
-    };
-    let rust_cmds = if is_rust {
-        format!("\n  - su - {username} -c 'rustup default stable'")
-    } else {
-        String::new()
-    };
-    let python_cmds = if is_python {
-        format!("\n  - su - {username} -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'")
-    } else {
-        String::new()
-    };
+        .flat_map(|t| t.runcmds(username))
+        .map(|cmd| format!("\n  - {cmd}"))
+        .collect();
     let timezone_line = match detect_timezone() {
         Some(tz) => format!("\ntimezone: {tz}"),
         None => String::new(),
@@ -1122,13 +1111,13 @@ packages:
   - mosh
   - just
   - socat
-  - bubblewrap{configurable_packages}{extra_packages}
+  - bubblewrap{configurable_packages}{toolchain_packages}
 
 runcmd:
   - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
   - systemctl restart sshd
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh{rust_cmds}{python_cmds}{extra_cmds}
+  - tailscale up --auth-key={tailscale_auth_key} --ssh{toolchain_cmds}{extra_cmds}
 "#
     )
 }
