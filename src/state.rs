@@ -56,6 +56,19 @@ pub enum Toolchain {
 }
 
 impl Toolchain {
+    /// All known toolchains, in detection order.
+    pub fn all() -> &'static [Toolchain] {
+        &[Toolchain::Rust, Toolchain::Python]
+    }
+
+    /// Returns true if this toolchain is detected in the given project root.
+    pub fn detect(&self, project_root: &std::path::Path) -> bool {
+        match self {
+            Toolchain::Rust => project_root.join("Cargo.toml").exists(),
+            Toolchain::Python => project_root.join("pyproject.toml").exists(),
+        }
+    }
+
     /// APT packages that must be installed for this toolchain.
     pub fn apt_packages(&self) -> &'static [&'static str] {
         match self {

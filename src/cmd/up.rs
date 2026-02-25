@@ -283,13 +283,11 @@ fn current_provisioning_config(
     cfg: &config::Config,
     project_config: &project_config::ProjectConfig,
 ) -> state::AppliedProvisioningConfig {
-    let mut toolchains = Vec::new();
-    if project.root.join("Cargo.toml").exists() {
-        toolchains.push(state::Toolchain::Rust);
-    }
-    if project.root.join("pyproject.toml").exists() {
-        toolchains.push(state::Toolchain::Python);
-    }
+    let toolchains = state::Toolchain::all()
+        .iter()
+        .filter(|t| t.detect(&project.root))
+        .cloned()
+        .collect();
     state::AppliedProvisioningConfig {
         server_type: project_config.server_type.clone(),
         toolchains,
