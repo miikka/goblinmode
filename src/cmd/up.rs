@@ -653,7 +653,10 @@ fn push_to_vm(
         bail!("No commits in this repository. Make an initial commit before running `gob up`.");
     }
 
-    let remote_url = format!("{}@{}:~/{}/", username, hostname, project_name);
+    // Use the server IP rather than the Tailscale hostname so that the push
+    // works even when the VM has not yet joined the tailnet (e.g. cloud-init
+    // just finished and Tailscale MagicDNS hasn't propagated yet).
+    let remote_url = format!("{}@{}:~/{}/", username, ip, project_name);
 
     // Remove existing remote if present, ignore errors
     let _ = Command::new("git")
