@@ -27,7 +27,7 @@ impl PackageSpec {
         match self {
             PackageSpec::Apt { .. } => None,
             PackageSpec::CurlInstaller { url, .. } => {
-                Some(format!("su - {username} -c 'curl -fsSL {url} | sh'"))
+                Some(format!("su - {username} -c 'curl -fsSL {url} | bash'"))
             }
             PackageSpec::CargoBinstall { name } => Some(format!(
                 "su - {username} -c \"/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data {name}\""
@@ -44,7 +44,7 @@ impl PackageSpec {
                 "sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {name}"
             )),
             PackageSpec::CurlInstaller { url, .. } => {
-                Some(format!("su - {username} -c 'curl -fsSL {url} | sh'"))
+                Some(format!("su - {username} -c 'curl -fsSL {url} | bash'"))
             }
             PackageSpec::CargoBinstall { .. } => None,
         }

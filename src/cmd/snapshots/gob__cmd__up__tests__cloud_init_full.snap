@@ -33,4 +33,4 @@ runcmd:
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --auth-key=tskey-auth-xxx --ssh
   - su - testuser -c 'rustup default stable'
-  - su - testuser -c 'curl -fsSL https://claude.ai/install.sh | sh'
+  - su - testuser -c 'curl -fsSL https://claude.ai/install.sh | bash'
