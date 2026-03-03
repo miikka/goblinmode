@@ -760,7 +760,7 @@ fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, pro
     };
 
     let remote_cmd = format!(
-        "cd ~/{project_name} && git remote remove origin 2>/dev/null; git remote add origin {origin_url}"
+        "cd ~/{project_name} && git remote remove origin 2>/dev/null; git remote add origin {origin_url} && git branch --set-upstream-to=origin/$(git rev-parse --abbrev-ref HEAD) $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true"
     );
     let result = Command::new("ssh")
         .args([
