@@ -33,7 +33,15 @@ impl RealDownActions {
 
 impl DownActions for RealDownActions {
     fn delete_tailscale_device(&mut self, hostname: &str) -> Result<()> {
-        self.ts_client.delete_device_by_hostname(hostname)
+        if self.ts_client.delete_device_by_hostname(hostname)? {
+            println!("Tailscale device '{}' deleted.", hostname);
+        } else {
+            println!(
+                "Tailscale device '{}' not found (already removed?).",
+                hostname
+            );
+        }
+        Ok(())
     }
 
     fn delete_server(&mut self, server_id: u64) -> Result<()> {
@@ -102,11 +110,7 @@ fn teardown_with<A: DownActions>(
     project: &project::Project,
     existing: &state::ProjectState,
 ) -> Result<()> {
-    let hostname = if existing.hostname.is_empty() {
-        format!("gob-{}", project.name)
-    } else {
-        existing.hostname.clone()
-    };
+    let hostname = existing.hostname_or_default(&project.name);
 
     // Remove from Tailscale
     if let Err(e) = actions.delete_tailscale_device(&hostname) {
@@ -215,6 +219,7 @@ mod tests {
     fn teardown_calls_expected_actions_with_server_and_snapshot() {
         let mut actions = MockActions::default();
         let existing = state::ProjectState {
+            version: 0,
             server_id: 42,
             ipv4: "1.2.3.4".to_string(),
             username: "u".to_string(),
@@ -244,6 +249,7 @@ mod tests {
     fn teardown_skips_server_delete_when_server_id_is_zero() {
         let mut actions = MockActions::default();
         let existing = state::ProjectState {
+            version: 0,
             server_id: 0,
             ipv4: "1.2.3.4".to_string(),
             username: "u".to_string(),
@@ -276,6 +282,7 @@ mod tests {
             ..Default::default()
         };
         let existing = state::ProjectState {
+            version: 0,
             server_id: 42,
             ipv4: "1.2.3.4".to_string(),
             username: "u".to_string(),

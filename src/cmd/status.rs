@@ -69,11 +69,7 @@ fn run_with<D: StatusDeps, O: StatusOutput>(deps: &D, out: &mut O) -> Result<()>
         }
     };
 
-    let hostname = if existing.hostname.is_empty() {
-        format!("gob-{}", project.name)
-    } else {
-        existing.hostname.clone()
-    };
+    let hostname = existing.hostname_or_default(&project.name);
 
     let cfg = deps.load_config()?;
     match deps.get_server_status(&cfg.hetzner_api_token, existing.server_id)? {
@@ -119,6 +115,7 @@ mod tests {
 
         fn load_state(&self, _project_id: &str) -> Result<Option<state::ProjectState>> {
             Ok(self.state.as_ref().map(|s| state::ProjectState {
+                version: s.version,
                 server_id: s.server_id,
                 ipv4: s.ipv4.clone(),
                 username: s.username.clone(),
@@ -196,6 +193,7 @@ mod tests {
         let deps = MockDeps {
             project: project(),
             state: Some(state::ProjectState {
+                version: 0,
                 server_id: 12,
                 ipv4: "1.2.3.4".to_string(),
                 username: "alice".to_string(),
@@ -225,6 +223,7 @@ mod tests {
         let deps = MockDeps {
             project: project(),
             state: Some(state::ProjectState {
+                version: 0,
                 server_id: 12,
                 ipv4: "1.2.3.4".to_string(),
                 username: "alice".to_string(),

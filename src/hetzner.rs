@@ -1,41 +1,16 @@
 use anyhow::{bail, Context, Result};
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::instrument;
+
 #[cfg(test)]
-use std::collections::VecDeque;
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use tracing::{info, instrument};
+use crate::http_client::MockCall;
+use crate::http_client::{is_success, ApiClient, AuthStrategy};
 
 const BASE_URL: &str = "https://api.hetzner.cloud/v1";
 
 pub struct HetznerClient {
-    client: Client,
-    token: String,
-    base_url: String,
-    #[cfg(test)]
-    mock_calls: Option<Arc<Mutex<VecDeque<MockCall>>>>,
-}
-
-struct HttpResponse {
-    status: u16,
-    body: String,
-}
-
-fn is_success(status: u16) -> bool {
-    (200..300).contains(&status)
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-struct MockCall {
-    method: String,
-    path: String,
-    status: u16,
-    body: String,
-    body_contains: Option<String>,
+    api: ApiClient,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,166 +73,24 @@ struct SshKey {
 impl HetznerClient {
     pub fn new(token: String) -> Self {
         Self {
-            client: Client::new(),
-            token,
-            base_url: BASE_URL.to_string(),
-            #[cfg(test)]
-            mock_calls: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_base_url(token: String, base_url: String) -> Self {
-        Self {
-            client: Client::new(),
-            token,
-            base_url,
-            mock_calls: None,
+            api: ApiClient::new(
+                AuthStrategy::Bearer(token),
+                BASE_URL.to_string(),
+                "hetzner_http",
+            ),
         }
     }
 
     #[cfg(test)]
     fn with_mock_calls(token: String, base_url: String, calls: Vec<MockCall>) -> Self {
-        let mut client = Self::with_base_url(token, base_url);
-        client.mock_calls = Some(Arc::new(Mutex::new(calls.into())));
-        client
-    }
-
-    #[cfg(test)]
-    fn maybe_mock(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<Option<HttpResponse>> {
-        let Some(calls) = &self.mock_calls else {
-            return Ok(None);
-        };
-        let mut calls = calls.lock().unwrap();
-        let call = calls
-            .pop_front()
-            .unwrap_or_else(|| panic!("unexpected request: {method} {path}"));
-        assert_eq!(call.method, method);
-        assert_eq!(call.path, path);
-        if let Some(fragment) = call.body_contains {
-            let req_body = body.unwrap_or("");
-            assert!(
-                req_body.contains(&fragment),
-                "request body missing fragment `{fragment}`: {req_body}"
-            );
+        Self {
+            api: ApiClient::with_mock_calls(
+                AuthStrategy::Bearer(token),
+                base_url,
+                "hetzner_http",
+                calls,
+            ),
         }
-        Ok(Some(HttpResponse {
-            status: call.status,
-            body: call.body,
-        }))
-    }
-
-    #[cfg(not(test))]
-    fn maybe_mock(
-        &self,
-        _method: &str,
-        _path: &str,
-        _body: Option<&str>,
-    ) -> Result<Option<HttpResponse>> {
-        Ok(None)
-    }
-
-    #[instrument(level = "debug", skip(self), fields(path = path))]
-    fn get(&self, path: &str) -> Result<HttpResponse> {
-        let start = Instant::now();
-        if let Some(resp) = self.maybe_mock("GET", path, None)? {
-            info!(
-                method = "GET",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "hetzner_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .get(format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "GET",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "hetzner_http"
-        );
-        Ok(HttpResponse { status, body })
-    }
-
-    #[instrument(level = "debug", skip(self, body), fields(path = path))]
-    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
-        let start = Instant::now();
-        let request_body = serde_json::to_string(body)?;
-        if let Some(resp) = self.maybe_mock("POST", path, Some(&request_body))? {
-            info!(
-                method = "POST",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "hetzner_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .post(format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token)
-            .json(body)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "POST",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "hetzner_http"
-        );
-        Ok(HttpResponse { status, body })
-    }
-
-    #[instrument(level = "debug", skip(self), fields(path = path))]
-    fn delete(&self, path: &str) -> Result<HttpResponse> {
-        let start = Instant::now();
-        if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
-            info!(
-                method = "DELETE",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "hetzner_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .delete(format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "DELETE",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "hetzner_http"
-        );
-        Ok(HttpResponse { status, body })
     }
 
     /// Create a server. Returns (server_id, ipv4).
@@ -281,7 +114,7 @@ impl HetznerClient {
             user_data: user_data.map(|s| s.to_string()),
             ssh_keys,
         };
-        let resp = self.post_json("/servers", &req)?;
+        let resp = self.api.post_json("/servers", &req)?;
 
         if !is_success(resp.status) && resp.status != 201 {
             bail!("Failed to create server ({}): {}", resp.status, resp.body);
@@ -297,7 +130,7 @@ impl HetznerClient {
     /// Poll until server is running. Returns the IPv4 address.
     pub fn wait_for_server(&self, server_id: u64) -> Result<String> {
         loop {
-            let resp = self.get(&format!("/servers/{}", server_id))?;
+            let resp = self.api.get(&format!("/servers/{}", server_id))?;
             if !is_success(resp.status) {
                 bail!("Failed to get server status: {}", resp.status);
             }
@@ -323,7 +156,7 @@ impl HetznerClient {
 
     /// Delete a server.
     pub fn delete_server(&self, server_id: u64) -> Result<()> {
-        let resp = self.delete(&format!("/servers/{}", server_id))?;
+        let resp = self.api.delete(&format!("/servers/{}", server_id))?;
         if resp.status == 404 {
             bail!("Server {} not found", server_id);
         }
@@ -335,7 +168,7 @@ impl HetznerClient {
 
     /// Find an SSH key by name, returns its ID if found.
     pub fn find_ssh_key_by_name(&self, name: &str) -> Result<Option<u64>> {
-        let resp = self.get("/ssh_keys")?;
+        let resp = self.api.get("/ssh_keys")?;
         if !is_success(resp.status) {
             bail!("Failed to list SSH keys: {}", resp.status);
         }
@@ -350,7 +183,7 @@ impl HetznerClient {
 
     /// Upload an SSH public key. Returns the key ID.
     pub fn create_ssh_key(&self, name: &str, public_key: &str) -> Result<u64> {
-        let resp = self.post_json(
+        let resp = self.api.post_json(
             "/ssh_keys",
             &serde_json::json!({
                 "name": name,
@@ -375,7 +208,7 @@ impl HetznerClient {
 
     /// Gracefully shutdown a server.
     pub fn shutdown_server(&self, server_id: u64) -> Result<()> {
-        let resp = self.post_json(
+        let resp = self.api.post_json(
             &format!("/servers/{}/actions/shutdown", server_id),
             &serde_json::json!({}),
         )?;
@@ -388,7 +221,7 @@ impl HetznerClient {
     /// Poll until server status is "off".
     pub fn wait_for_server_off(&self, server_id: u64) -> Result<()> {
         loop {
-            let resp = self.get(&format!("/servers/{}", server_id))?;
+            let resp = self.api.get(&format!("/servers/{}", server_id))?;
             if !is_success(resp.status) {
                 bail!("Failed to get server status: {}", resp.status);
             }
@@ -403,7 +236,7 @@ impl HetznerClient {
 
     /// Create a snapshot image of a server. Returns the image ID.
     pub fn create_image(&self, server_id: u64, description: &str) -> Result<u64> {
-        let resp = self.post_json(
+        let resp = self.api.post_json(
             &format!("/servers/{}/actions/create_image", server_id),
             &serde_json::json!({
                 "description": description,
@@ -427,7 +260,7 @@ impl HetznerClient {
     /// Poll until an image is available.
     pub fn wait_for_image(&self, image_id: u64) -> Result<()> {
         loop {
-            let resp = self.get(&format!("/images/{}", image_id))?;
+            let resp = self.api.get(&format!("/images/{}", image_id))?;
             if !is_success(resp.status) {
                 bail!("Failed to get image status: {}", resp.status);
             }
@@ -443,7 +276,9 @@ impl HetznerClient {
 
     /// List all snapshots with the managed-by=goblinmode label.
     pub fn list_goblinmode_snapshots(&self) -> Result<Vec<SnapshotInfo>> {
-        let resp = self.get("/images?type=snapshot&label_selector=managed-by%3Dgoblinmode")?;
+        let resp = self
+            .api
+            .get("/images?type=snapshot&label_selector=managed-by%3Dgoblinmode")?;
         if !is_success(resp.status) {
             bail!("Failed to list images: {}", resp.status);
         }
@@ -467,8 +302,9 @@ impl HetznerClient {
     }
 
     /// Delete an image/snapshot.
+    #[instrument(level = "info", skip(self), fields(image_id = image_id))]
     pub fn delete_image(&self, image_id: u64) -> Result<()> {
-        let resp = self.delete(&format!("/images/{}", image_id))?;
+        let resp = self.api.delete(&format!("/images/{}", image_id))?;
         if !is_success(resp.status) && resp.status != 404 {
             bail!("Failed to delete image ({}): {}", resp.status, resp.body);
         }
@@ -477,7 +313,9 @@ impl HetznerClient {
 
     /// List all servers with the managed-by=goblinmode label.
     pub fn list_goblinmode_servers(&self) -> Result<Vec<ServerInfo>> {
-        let resp = self.get("/servers?label_selector=managed-by%3Dgoblinmode")?;
+        let resp = self
+            .api
+            .get("/servers?label_selector=managed-by%3Dgoblinmode")?;
         if !is_success(resp.status) {
             bail!("Failed to list servers: {}", resp.status);
         }
@@ -497,7 +335,7 @@ impl HetznerClient {
 
     /// Check if a server still exists and is running.
     pub fn get_server_status(&self, server_id: u64) -> Result<Option<(String, String)>> {
-        let resp = self.get(&format!("/servers/{}", server_id))?;
+        let resp = self.api.get(&format!("/servers/{}", server_id))?;
         if resp.status == 404 {
             return Ok(None);
         }
@@ -530,13 +368,7 @@ pub struct SnapshotInfo {
 mod tests {
     use super::*;
     fn call(method: &str, path: &str, status: u16, body: &str) -> MockCall {
-        MockCall {
-            method: method.to_string(),
-            path: path.to_string(),
-            status,
-            body: body.to_string(),
-            body_contains: None,
-        }
+        MockCall::new(method, path, status, body)
     }
 
     #[test]
