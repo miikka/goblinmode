@@ -77,7 +77,15 @@ impl PauseActions for RealPauseActions {
     }
 
     fn delete_tailscale_device(&mut self, hostname: &str) -> Result<()> {
-        self.tailscale.delete_device_by_hostname(hostname)
+        if self.tailscale.delete_device_by_hostname(hostname)? {
+            println!("Tailscale device '{}' deleted.", hostname);
+        } else {
+            println!(
+                "Tailscale device '{}' not found (already removed?).",
+                hostname
+            );
+        }
+        Ok(())
     }
 
     fn remove_known_host(&mut self, host: &str) {
@@ -146,11 +154,7 @@ fn pause_with<A: PauseActions>(
     actions.delete_server(existing.server_id)?;
     println!("done");
 
-    let hostname = if existing.hostname.is_empty() {
-        format!("gob-{}", project.name)
-    } else {
-        existing.hostname.clone()
-    };
+    let hostname = existing.hostname_or_default(&project.name);
     if let Err(e) = actions.delete_tailscale_device(&hostname) {
         eprintln!("Warning: failed to remove Tailscale device: {}", e);
     }
@@ -159,15 +163,15 @@ fn pause_with<A: PauseActions>(
         actions.remove_known_host(host);
     }
 
-    let paused_state = state::ProjectState {
-        server_id: 0,
-        ipv4: String::new(),
-        username: existing.username,
-        hostname: existing.hostname,
-        snapshot_id: Some(image_id),
-        applied_runtime: existing.applied_runtime,
-        applied_provisioning: existing.applied_provisioning,
-    };
+    let paused_state = state::ProjectState::new(
+        0,
+        String::new(),
+        existing.username,
+        existing.hostname,
+        Some(image_id),
+        existing.applied_runtime,
+        existing.applied_provisioning,
+    );
     actions.save_state(&project.id, &paused_state)?;
 
     println!("Server paused. Run `gob up` to restore from snapshot.");
@@ -196,6 +200,7 @@ mod tests {
 
         fn load_state(&self, _project_id: &str) -> Result<Option<state::ProjectState>> {
             Ok(self.state.as_ref().map(|s| state::ProjectState {
+                version: s.version,
                 server_id: s.server_id,
                 ipv4: s.ipv4.clone(),
                 username: s.username.clone(),
@@ -279,6 +284,7 @@ mod tests {
         fn save_state(&mut self, _project_id: &str, s: &state::ProjectState) -> Result<()> {
             self.calls.borrow_mut().push("save_state".to_string());
             self.saved_state.replace(Some(state::ProjectState {
+                version: s.version,
                 server_id: s.server_id,
                 ipv4: s.ipv4.clone(),
                 username: s.username.clone(),
@@ -314,6 +320,7 @@ mod tests {
         let deps = MockDeps {
             project: project(),
             state: Some(state::ProjectState {
+                version: 0,
                 server_id: 0,
                 ipv4: "".to_string(),
                 username: "u".to_string(),
@@ -331,6 +338,7 @@ mod tests {
     fn pause_with_runs_expected_sequence_and_saves_snapshot_state() {
         let mut actions = MockActions::default();
         let existing = state::ProjectState {
+            version: 0,
             server_id: 42,
             ipv4: "1.2.3.4".to_string(),
             username: "alice".to_string(),
@@ -369,6 +377,7 @@ mod tests {
             ..Default::default()
         };
         let existing = state::ProjectState {
+            version: 0,
             server_id: 42,
             ipv4: "1.2.3.4".to_string(),
             username: "alice".to_string(),

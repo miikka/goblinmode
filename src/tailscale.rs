@@ -1,41 +1,14 @@
 use anyhow::{bail, Context, Result};
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+
 #[cfg(test)]
-use std::collections::VecDeque;
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use tracing::{info, instrument};
+use crate::http_client::MockCall;
+use crate::http_client::{is_success, ApiClient, AuthStrategy};
 
 const BASE_URL: &str = "https://api.tailscale.com/api/v2";
 
 pub struct TailscaleClient {
-    client: Client,
-    api_key: String,
-    base_url: String,
-    #[cfg(test)]
-    mock_calls: Option<Arc<Mutex<VecDeque<MockCall>>>>,
-}
-
-struct HttpResponse {
-    status: u16,
-    body: String,
-}
-
-fn is_success(status: u16) -> bool {
-    (200..300).contains(&status)
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-struct MockCall {
-    method: String,
-    path: String,
-    status: u16,
-    body: String,
-    body_contains: Option<String>,
-    body_not_contains: Option<String>,
+    api: ApiClient,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,92 +25,37 @@ struct Device {
 impl TailscaleClient {
     pub fn new(api_key: String) -> Self {
         Self {
-            client: Client::new(),
-            api_key,
-            base_url: BASE_URL.to_string(),
-            #[cfg(test)]
-            mock_calls: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_base_url(api_key: String, base_url: String) -> Self {
-        Self {
-            client: Client::new(),
-            api_key,
-            base_url,
-            mock_calls: None,
+            api: ApiClient::new(
+                AuthStrategy::BasicUsername(api_key),
+                BASE_URL.to_string(),
+                "tailscale_http",
+            ),
         }
     }
 
     #[cfg(test)]
     fn with_mock_calls(api_key: String, base_url: String, calls: Vec<MockCall>) -> Self {
-        let mut client = Self::with_base_url(api_key, base_url);
-        client.mock_calls = Some(Arc::new(Mutex::new(calls.into())));
-        client
-    }
-
-    #[cfg(test)]
-    fn maybe_mock(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<Option<HttpResponse>> {
-        let Some(calls) = &self.mock_calls else {
-            return Ok(None);
-        };
-        let mut calls = calls.lock().unwrap();
-        let call = calls
-            .pop_front()
-            .unwrap_or_else(|| panic!("unexpected request: {method} {path}"));
-        assert_eq!(call.method, method);
-        assert_eq!(call.path, path);
-        let req_body = body.unwrap_or("");
-        if let Some(fragment) = call.body_contains {
-            assert!(
-                req_body.contains(&fragment),
-                "request body missing fragment `{fragment}`: {req_body}"
-            );
+        Self {
+            api: ApiClient::with_mock_calls(
+                AuthStrategy::BasicUsername(api_key),
+                base_url,
+                "tailscale_http",
+                calls,
+            ),
         }
-        if let Some(fragment) = call.body_not_contains {
-            assert!(
-                !req_body.contains(&fragment),
-                "request body unexpectedly contains `{fragment}`: {req_body}"
-            );
-        }
-        Ok(Some(HttpResponse {
-            status: call.status,
-            body: call.body,
-        }))
-    }
-
-    #[cfg(not(test))]
-    fn maybe_mock(
-        &self,
-        _method: &str,
-        _path: &str,
-        _body: Option<&str>,
-    ) -> Result<Option<HttpResponse>> {
-        Ok(None)
     }
 
     /// Delete a device from the tailnet by its hostname.
-    pub fn delete_device_by_hostname(&self, hostname: &str) -> Result<()> {
+    /// Returns `true` if the device was found and deleted, `false` if not found.
+    pub fn delete_device_by_hostname(&self, hostname: &str) -> Result<bool> {
         let device_id = self.find_device_by_hostname(hostname)?;
         match device_id {
             Some(id) => {
                 self.delete_device_by_id(&id)?;
-                println!("Tailscale device '{}' deleted.", hostname);
+                Ok(true)
             }
-            None => {
-                println!(
-                    "Tailscale device '{}' not found (already removed?).",
-                    hostname
-                );
-            }
+            None => Ok(false),
         }
-        Ok(())
     }
 
     /// List all devices whose hostname starts with "gob-".
@@ -153,106 +71,9 @@ impl TailscaleClient {
             .collect())
     }
 
-    #[instrument(level = "debug", skip(self), fields(path = path))]
-    fn get(&self, path: &str) -> Result<HttpResponse> {
-        let start = Instant::now();
-        if let Some(resp) = self.maybe_mock("GET", path, None)? {
-            info!(
-                method = "GET",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "tailscale_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .get(format!("{}{}", self.base_url, path))
-            .basic_auth(&self.api_key, Option::<&str>::None)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "GET",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "tailscale_http"
-        );
-        Ok(HttpResponse { status, body })
-    }
-
-    #[instrument(level = "debug", skip(self), fields(path = path))]
-    fn delete(&self, path: &str) -> Result<HttpResponse> {
-        let start = Instant::now();
-        if let Some(resp) = self.maybe_mock("DELETE", path, None)? {
-            info!(
-                method = "DELETE",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "tailscale_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .delete(format!("{}{}", self.base_url, path))
-            .basic_auth(&self.api_key, Option::<&str>::None)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "DELETE",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "tailscale_http"
-        );
-        Ok(HttpResponse { status, body })
-    }
-
-    #[instrument(level = "debug", skip(self, body), fields(path = path))]
-    fn post_json<T: Serialize>(&self, path: &str, body: &T) -> Result<HttpResponse> {
-        let start = Instant::now();
-        let request_body = serde_json::to_string(body)?;
-        if let Some(resp) = self.maybe_mock("POST", path, Some(&request_body))? {
-            info!(
-                method = "POST",
-                path = path,
-                status = resp.status,
-                mock = true,
-                duration_ms = start.elapsed().as_millis(),
-                "tailscale_http"
-            );
-            return Ok(resp);
-        }
-        let resp = self
-            .client
-            .post(format!("{}{}", self.base_url, path))
-            .basic_auth(&self.api_key, Option::<&str>::None)
-            .json(body)
-            .send()
-            .context("HTTP request failed")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        info!(
-            method = "POST",
-            path = path,
-            status = status,
-            duration_ms = start.elapsed().as_millis(),
-            "tailscale_http"
-        );
-        Ok(HttpResponse { status, body })
-    }
-
     fn list_devices(&self) -> Result<Vec<Device>> {
         let resp = self
+            .api
             .get("/tailnet/-/devices")
             .context("Failed to list Tailscale devices")?;
 
@@ -280,6 +101,7 @@ impl TailscaleClient {
 
     pub fn delete_device_by_id(&self, device_id: &str) -> Result<()> {
         let resp = self
+            .api
             .delete(&format!("/device/{}", device_id))
             .context("Failed to delete Tailscale device")?;
 
@@ -354,6 +176,7 @@ impl TailscaleClient {
         };
 
         let resp = self
+            .api
             .post_json("/tailnet/-/keys", &request)
             .context("Failed to create Tailscale auth key")?;
 
@@ -376,14 +199,7 @@ impl TailscaleClient {
 mod tests {
     use super::*;
     fn call(method: &str, path: &str, status: u16, body: &str) -> MockCall {
-        MockCall {
-            method: method.to_string(),
-            path: path.to_string(),
-            status,
-            body: body.to_string(),
-            body_contains: None,
-            body_not_contains: None,
-        }
+        MockCall::new(method, path, status, body)
     }
 
     #[test]
@@ -418,7 +234,7 @@ mod tests {
                 call("DELETE", "/device/dev-1", 200, "{}"),
             ],
         );
-        client.delete_device_by_hostname("gob-one").unwrap();
+        assert!(client.delete_device_by_hostname("gob-one").unwrap());
     }
 
     #[test]
@@ -433,7 +249,7 @@ mod tests {
                 r#"{"devices":[{"id":"dev-1","hostname":"something-else"}]}"#,
             )],
         );
-        client.delete_device_by_hostname("gob-one").unwrap();
+        assert!(!client.delete_device_by_hostname("gob-one").unwrap());
     }
 
     #[test]

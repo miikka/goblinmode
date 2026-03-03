@@ -1,9 +1,12 @@
+mod cloud_init;
 mod cmd;
 mod config;
 mod hetzner;
+mod http_client;
 mod packages;
 mod project;
 mod project_config;
+mod ssh;
 mod state;
 mod tailscale;
 mod tracing_setup;

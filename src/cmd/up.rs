@@ -2,15 +2,16 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
-use std::time::Duration;
 use tracing::{info, instrument, warn};
 
+use crate::cloud_init;
 use crate::cmd::down;
 use crate::config;
 use crate::hetzner::HetznerClient;
 use crate::packages::PackageSpec;
 use crate::project;
 use crate::project_config;
+use crate::ssh;
 use crate::state;
 use crate::tailscale::TailscaleClient;
 
@@ -75,7 +76,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         info!(server_id = existing.server_id, ip = %ip, "existing_server_running");
                         println!("running");
                         let username = existing.username.clone();
-                        wait_for_ssh(&username, &ip)?;
+                        ssh::wait_for_ssh(&username, &ip)?;
                         reconcile_runtime_config(
                             &username,
                             &ip,
@@ -86,22 +87,18 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                             existing.applied_provisioning.as_ref(),
                             &current_provisioning,
                         );
-                        let hostname = if existing.hostname.is_empty() {
-                            format!("gob-{}", project.name)
-                        } else {
-                            existing.hostname.clone()
-                        };
+                        let hostname = existing.hostname_or_default(&project.name);
                         state::save_state(
                             &project.id,
-                            &state::ProjectState {
-                                server_id: existing.server_id,
-                                ipv4: ip,
-                                username: username.clone(),
-                                hostname: hostname.clone(),
-                                snapshot_id: existing.snapshot_id,
-                                applied_runtime: Some(current_runtime.clone()),
-                                applied_provisioning: Some(current_provisioning.clone()),
-                            },
+                            &state::ProjectState::new(
+                                existing.server_id,
+                                ip,
+                                username.clone(),
+                                hostname.clone(),
+                                existing.snapshot_id,
+                                Some(current_runtime.clone()),
+                                Some(current_provisioning.clone()),
+                            ),
                         )?;
                         return Ok(Env {
                             username,
@@ -146,7 +143,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     // 6. Create server with cloud-init
     let username = whoami();
     let tailscale_auth_key = resolve_tailscale_auth_key(&cfg)?;
-    let user_data = build_cloud_init(
+    let user_data = cloud_init::build_cloud_init(
         &username,
         ssh_pubkey.trim(),
         &tailscale_auth_key,
@@ -178,15 +175,15 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     info!(server_id = server_id, ip = %initial_ip, "server_created");
 
     // 6. Save state immediately so Ctrl-C doesn't orphan the server
-    let project_state = state::ProjectState {
+    let project_state = state::ProjectState::new(
         server_id,
-        ipv4: initial_ip,
-        username: username.clone(),
-        hostname: server_name.clone(),
-        snapshot_id: None,
-        applied_runtime: Some(current_runtime.clone()),
-        applied_provisioning: Some(current_provisioning.clone()),
-    };
+        initial_ip,
+        username.clone(),
+        server_name.clone(),
+        None,
+        Some(current_runtime.clone()),
+        Some(current_provisioning.clone()),
+    );
     state::save_state(&project.id, &project_state)?;
 
     // 7. Poll until running
@@ -195,22 +192,22 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     info!(server_id = server_id, ip = %ip, "server_running");
 
     // Update state with final IP
-    let project_state = state::ProjectState {
+    let project_state = state::ProjectState::new(
         server_id,
-        ipv4: ip.clone(),
-        username: username.clone(),
-        hostname: server_name.clone(),
-        snapshot_id: None,
-        applied_runtime: Some(current_runtime.clone()),
-        applied_provisioning: Some(current_provisioning.clone()),
-    };
+        ip.clone(),
+        username.clone(),
+        server_name.clone(),
+        None,
+        Some(current_runtime.clone()),
+        Some(current_provisioning.clone()),
+    );
     state::save_state(&project.id, &project_state)?;
 
     // 8. Wait for SSH
-    wait_for_ssh(&username, &ip)?;
+    ssh::wait_for_ssh(&username, &ip)?;
 
     // 9. Wait for cloud-init to finish (packages, tailscale, etc.)
-    wait_for_cloud_init(&username, &ip)?;
+    ssh::wait_for_cloud_init(&username, &ip)?;
 
     // 10. Configure tailscale serve ports
     setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
@@ -382,7 +379,7 @@ fn reconcile_runtime_config(
 ) {
     let target = format!("{}@{}", username, ip);
     reconcile_runtime_config_with(username, previous, current, |remote_cmd| {
-        run_remote_status(&target, remote_cmd)
+        ssh::run_remote_status(&target, remote_cmd)
             .map(|s| s.success())
             .unwrap_or(false)
     });
@@ -454,11 +451,7 @@ fn restore_from_snapshot(
 
     println!("Restoring from snapshot (image: {})...", snapshot_id);
 
-    let server_name = if existing.hostname.is_empty() {
-        format!("gob-{}", project.name)
-    } else {
-        existing.hostname.clone()
-    };
+    let server_name = existing.hostname_or_default(&project.name);
     let username = if existing.username.is_empty() {
         whoami()
     } else {
@@ -486,15 +479,15 @@ fn restore_from_snapshot(
     info!(server_id = server_id, "snapshot_server_created");
 
     // Save state immediately so Ctrl-C doesn't orphan the server
-    let project_state = state::ProjectState {
+    let project_state = state::ProjectState::new(
         server_id,
-        ipv4: initial_ip,
-        username: username.clone(),
-        hostname: server_name.clone(),
-        snapshot_id: None,
-        applied_runtime: Some(current_runtime.clone()),
-        applied_provisioning: Some(current_provisioning.clone()),
-    };
+        initial_ip,
+        username.clone(),
+        server_name.clone(),
+        None,
+        Some(current_runtime.clone()),
+        Some(current_provisioning.clone()),
+    );
     state::save_state(&project.id, &project_state)?;
 
     let ip = client.wait_for_server(server_id)?;
@@ -502,33 +495,29 @@ fn restore_from_snapshot(
     info!(server_id = server_id, ip = %ip, "snapshot_server_running");
 
     // Update state with final IP
-    let project_state = state::ProjectState {
+    let project_state = state::ProjectState::new(
         server_id,
-        ipv4: ip.clone(),
-        username: username.clone(),
-        hostname: server_name.clone(),
-        snapshot_id: None,
-        applied_runtime: Some(current_runtime.clone()),
-        applied_provisioning: Some(current_provisioning.clone()),
-    };
+        ip.clone(),
+        username.clone(),
+        server_name.clone(),
+        None,
+        Some(current_runtime.clone()),
+        Some(current_provisioning.clone()),
+    );
     state::save_state(&project.id, &project_state)?;
 
     // Wait for SSH
-    wait_for_ssh(&username, &ip)?;
+    ssh::wait_for_ssh(&username, &ip)?;
 
     // Re-authenticate tailscale
     print!("Re-authenticating Tailscale... ");
     io::stdout().flush()?;
     let tailscale_auth_key = resolve_tailscale_auth_key(cfg)?;
-    let ts_result = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            &format!("sudo tailscale up --auth-key={} --ssh", tailscale_auth_key),
-        ])
-        .output();
-    match ts_result {
+    match ssh::run_ssh_cmd(
+        &username,
+        &ip,
+        &format!("sudo tailscale up --auth-key={} --ssh", tailscale_auth_key),
+    ) {
         Ok(output) if output.status.success() => println!("ok"),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -571,57 +560,13 @@ fn restore_from_snapshot(
     })
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
-fn wait_for_ssh(username: &str, ip: &str) -> Result<()> {
-    print!("Waiting for SSH... ");
-    io::stdout().flush()?;
-
-    let max_attempts = 60; // 2 minutes max
-    let target = format!("{}@{}", username, ip);
-
-    for attempt in 1..=max_attempts {
-        let result = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "ConnectTimeout=2",
-                "-o",
-                "BatchMode=yes",
-                &target,
-                "true",
-            ])
-            .output();
-
-        if let Ok(output) = result {
-            if output.status.success() {
-                println!("ok");
-                info!(attempt = attempt, "wait_for_ssh_success");
-                return Ok(());
-            }
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-
-    warn!(ip = ip, max_attempts = max_attempts, "wait_for_ssh_timeout");
-    anyhow::bail!("Timed out waiting for SSH on {}", ip);
-}
-
 #[instrument(level = "info", skip_all, fields(username = username, ip = ip, project_name = project_name))]
 fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
     println!("Initializing git repo on VM...");
     let remote_cmd = format!(
         "mkdir -p ~/{project_name} && cd ~/{project_name} && git init && git config receive.denyCurrentBranch updateInstead"
     );
-    let output = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            &remote_cmd,
-        ])
-        .output()
-        .context("Failed to run ssh")?;
+    let output = ssh::run_ssh_cmd(username, ip, &remote_cmd)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -719,15 +664,11 @@ fn push_to_vm(
     }
 
     // Checkout the pushed branch on the VM
-    let checkout_output = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            &format!("cd ~/{} && git checkout {}", project_name, branch),
-        ])
-        .output()
-        .context("Failed to checkout branch on VM")?;
+    let checkout_output = ssh::run_ssh_cmd(
+        username,
+        ip,
+        &format!("cd ~/{} && git checkout {}", project_name, branch),
+    )?;
     if !checkout_output.status.success() {
         let stderr = String::from_utf8_lossy(&checkout_output.stderr);
         bail!(
@@ -762,17 +703,8 @@ fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, pro
     let remote_cmd = format!(
         "cd ~/{project_name} && git remote remove origin 2>/dev/null; git remote add origin {origin_url}"
     );
-    let result = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            &remote_cmd,
-        ])
-        .status();
-
-    match result {
-        Ok(s) if s.success() => println!("  VM origin set to {}", origin_url),
+    match ssh::run_ssh_cmd(username, ip, &remote_cmd) {
+        Ok(output) if output.status.success() => println!("  VM origin set to {}", origin_url),
         Ok(_) => eprintln!("Warning: failed to set origin remote on VM"),
         Err(e) => eprintln!("Warning: failed to set origin remote on VM: {}", e),
     }
@@ -830,28 +762,22 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     let target = format!("{}@{}", username, ip);
 
     // SCP private and public key to VM
-    let scp_result = Command::new("scp")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &private_key_path.to_string_lossy(),
-            &format!("{}:~/.ssh/id_ed25519", target),
-        ])
-        .status();
-    if !matches!(scp_result, Ok(s) if s.success()) {
+    if !ssh::scp_file(
+        &private_key_path.to_string_lossy(),
+        &format!("{}:~/.ssh/id_ed25519", target),
+    )
+    .unwrap_or(false)
+    {
         eprintln!("Warning: failed to copy SSH private key to VM");
         return;
     }
 
-    let scp_result = Command::new("scp")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &public_key_path.to_string_lossy(),
-            &format!("{}:~/.ssh/id_ed25519.pub", target),
-        ])
-        .status();
-    if !matches!(scp_result, Ok(s) if s.success()) {
+    if !ssh::scp_file(
+        &public_key_path.to_string_lossy(),
+        &format!("{}:~/.ssh/id_ed25519.pub", target),
+    )
+    .unwrap_or(false)
+    {
         eprintln!("Warning: failed to copy SSH public key to VM");
         return;
     }
@@ -863,53 +789,13 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
         "chmod 600 ~/.ssh/id_ed25519 && echo '{}' >> ~/.ssh/config && chmod 600 ~/.ssh/config",
         ssh_config
     );
-    let _ = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &target,
-            &remote_cmd,
-        ])
-        .status();
+    let _ = ssh::run_ssh_cmd(username, ip, &remote_cmd);
 
     // Print public key for user
     if let Ok(pubkey) = fs::read_to_string(&public_key_path) {
         println!("  VM SSH public key (add to GitHub/GitLab if not already done):");
         println!("  {}", pubkey.trim());
     }
-}
-
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
-fn wait_for_cloud_init(username: &str, ip: &str) -> Result<()> {
-    print!("Waiting for cloud-init... ");
-    io::stdout().flush()?;
-
-    let output = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            "cloud-init status --wait",
-        ])
-        .output()
-        .context("Failed to run ssh")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if output.status.success() || stdout.contains("status: done") {
-        println!("done");
-        info!("wait_for_cloud_init_done");
-    } else {
-        let msg = if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            stderr.trim().to_string()
-        };
-        bail!("cloud-init failed: {}", msg);
-    }
-
-    Ok(())
 }
 
 #[instrument(level = "info", skip_all, fields(username = username, ip = ip, repo = repo))]
@@ -921,45 +807,14 @@ fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
         repo, install_cmd
     );
 
-    let result = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            &format!("{}@{}", username, ip),
-            &remote_cmd,
-        ])
-        .status();
-
-    match result {
-        Ok(status) if status.success() => println!("  Dotfiles installed"),
-        Ok(status) => eprintln!(
+    match ssh::run_ssh_cmd(username, ip, &remote_cmd) {
+        Ok(output) if output.status.success() => println!("  Dotfiles installed"),
+        Ok(output) => eprintln!(
             "Warning: dotfiles setup failed (exit code {})",
-            status.code().unwrap_or(-1)
+            output.status.code().unwrap_or(-1)
         ),
         Err(e) => eprintln!("Warning: dotfiles setup failed: {}", e),
     }
-}
-
-#[instrument(level = "debug", skip_all, fields(target = target, remote_cmd = remote_cmd))]
-fn run_remote_status(target: &str, remote_cmd: &str) -> io::Result<std::process::ExitStatus> {
-    let status = Command::new("ssh")
-        .args(["-o", "StrictHostKeyChecking=accept-new", target, remote_cmd])
-        .status();
-    match &status {
-        Ok(exit) => info!(
-            target = target,
-            remote_cmd = remote_cmd,
-            code = ?exit.code(),
-            "run_remote_status"
-        ),
-        Err(err) => warn!(
-            target = target,
-            remote_cmd = remote_cmd,
-            error = %err,
-            "run_remote_status_failed"
-        ),
-    }
-    status
 }
 
 #[instrument(level = "debug", skip_all, fields(ports = ?ports))]
@@ -987,7 +842,7 @@ where
 fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
     let target = format!("{}@{}", username, ip);
     reconcile_tailscale_serve_with(ports, &mut |remote_cmd| {
-        run_remote_status(&target, remote_cmd)
+        ssh::run_remote_status(&target, remote_cmd)
             .map(|s| s.success())
             .unwrap_or(false)
     });
@@ -1003,121 +858,6 @@ fn resolve_tailscale_auth_key(cfg: &config::Config) -> Result<String> {
     println!("No tailscale_auth_key configured — creating one-time key via API...");
     let ts = TailscaleClient::new(cfg.tailscale_api_key.clone());
     ts.create_auth_key(&cfg.tailscale_tags)
-}
-
-fn detect_timezone() -> Option<String> {
-    // 1. Honour explicit TZ env var
-    if let Ok(tz) = std::env::var("TZ") {
-        if !tz.is_empty() {
-            return Some(tz);
-        }
-    }
-
-    // 2. Resolve /etc/localtime symlink and strip the zoneinfo prefix.
-    // Works on Linux (/usr/share/zoneinfo/…) and macOS (/var/db/timezone/zoneinfo/…).
-    if let Ok(target) = std::fs::read_link("/etc/localtime") {
-        let s = target.to_string_lossy();
-        if let Some(pos) = s.find("/zoneinfo/") {
-            let tz = &s[pos + "/zoneinfo/".len()..];
-            if !tz.is_empty() {
-                return Some(tz.to_string());
-            }
-        }
-    }
-
-    // 3. Linux fallback: /etc/timezone plain-text file (e.g. "Europe/Helsinki\n")
-    // (Not present on macOS, but harmless to try.)
-    if let Ok(contents) = std::fs::read_to_string("/etc/timezone") {
-        let tz = contents.trim().to_string();
-        if !tz.is_empty() {
-            return Some(tz);
-        }
-    }
-
-    None
-}
-
-pub(crate) fn build_cloud_init(
-    username: &str,
-    ssh_pubkey: &str,
-    tailscale_auth_key: &str,
-    toolchains: &[state::Toolchain],
-    packages: &[PackageSpec],
-) -> String {
-    let toolchain_packages: String = toolchains
-        .iter()
-        .flat_map(|t| t.apt_packages())
-        .map(|p| format!("\n  - {p}"))
-        .collect();
-    let toolchain_cmds: String = toolchains
-        .iter()
-        .flat_map(|t| t.runcmds(username))
-        .map(|cmd| format!("\n  - {cmd}"))
-        .collect();
-    let timezone_line = match detect_timezone() {
-        Some(tz) => format!("\ntimezone: {tz}"),
-        None => String::new(),
-    };
-
-    // APT packages go into the `packages:` YAML list
-    let configurable_packages: String = packages
-        .iter()
-        .filter_map(|p| {
-            if let PackageSpec::Apt { name } = p {
-                Some(format!("\n  - {name}"))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Non-APT packages go into `runcmd:`.
-    // If there are any CargoBinstall specs, bootstrap cargo-binstall first.
-    let has_cargo_binstall = packages
-        .iter()
-        .any(|p| matches!(p, PackageSpec::CargoBinstall { .. }));
-
-    let mut extra_cmds = String::new();
-    if has_cargo_binstall {
-        extra_cmds.push_str(&format!(
-            "\n  - su - {username} -c \"curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash\""
-        ));
-    }
-    for pkg in packages {
-        if let Some(cmd) = pkg.cloud_init_runcmd(username) {
-            extra_cmds.push_str(&format!("\n  - {cmd}"));
-        }
-    }
-
-    format!(
-        r#"#cloud-config{timezone_line}
-users:
-  - name: {username}
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/zsh
-    ssh_authorized_keys:
-      - {ssh_pubkey}
-
-ssh_pwauth: false
-
-package_update: true
-packages:
-  - git
-  - stow
-  - zsh
-  - tmux
-  - mosh
-  - just
-  - socat
-  - bubblewrap{configurable_packages}{toolchain_packages}
-
-runcmd:
-  - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
-  - systemctl restart sshd
-  - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key={tailscale_auth_key} --ssh{toolchain_cmds}{extra_cmds}
-"#
-    )
 }
 
 pub(crate) fn whoami() -> String {
@@ -1166,90 +906,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::path::PathBuf;
-
-    fn test_cloud_init(toolchains: &[state::Toolchain], packages: &[PackageSpec]) -> String {
-        // Pin timezone so snapshots are deterministic across machines
-        std::env::set_var("TZ", "UTC");
-        build_cloud_init(
-            "testuser",
-            "ssh-ed25519 AAAA",
-            "tskey-auth-xxx",
-            toolchains,
-            packages,
-        )
-    }
-
-    #[test]
-    fn cloud_init_basic() {
-        let output = test_cloud_init(&[], &[]);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_with_rust() {
-        let output = test_cloud_init(&[state::Toolchain::Rust], &[]);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_with_python() {
-        let output = test_cloud_init(&[state::Toolchain::Python], &[]);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_with_packages() {
-        let packages = vec![
-            PackageSpec::Apt {
-                name: "nodejs".to_string(),
-            },
-            PackageSpec::Apt {
-                name: "python3".to_string(),
-            },
-        ];
-        let output = test_cloud_init(&[], &packages);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_with_agents() {
-        let packages = vec![
-            PackageSpec::CurlInstaller {
-                name: "claude-code".to_string(),
-                url: "https://claude.ai/install.sh".to_string(),
-            },
-            PackageSpec::CurlInstaller {
-                name: "opencode".to_string(),
-                url: "https://opencode.ai/install".to_string(),
-            },
-        ];
-        let output = test_cloud_init(&[], &packages);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_with_cargo_packages() {
-        let packages = vec![PackageSpec::CargoBinstall {
-            name: "jj-cli".to_string(),
-        }];
-        let output = test_cloud_init(&[], &packages);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn cloud_init_full() {
-        let packages = vec![
-            PackageSpec::Apt {
-                name: "nodejs".to_string(),
-            },
-            PackageSpec::CurlInstaller {
-                name: "claude-code".to_string(),
-                url: "https://claude.ai/install.sh".to_string(),
-            },
-        ];
-        let output = test_cloud_init(&[state::Toolchain::Rust], &packages);
-        insta::assert_snapshot!(output);
-    }
 
     #[test]
     fn whoami_uses_user_env() {

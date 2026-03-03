@@ -121,8 +121,14 @@ impl AppliedProvisioningConfig {
     }
 }
 
+/// Current state file version. Bump when adding migrations.
+pub const CURRENT_VERSION: u32 = 2;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectState {
+    /// Schema version — absent (or 0) in legacy files, `CURRENT_VERSION` in new ones.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub server_id: u64,
     #[serde(default)]
@@ -137,6 +143,39 @@ pub struct ProjectState {
     pub applied_runtime: Option<AppliedRuntimeConfig>,
     #[serde(default)]
     pub applied_provisioning: Option<AppliedProvisioningConfig>,
+}
+
+impl ProjectState {
+    /// Create a new state with the current schema version.
+    pub fn new(
+        server_id: u64,
+        ipv4: String,
+        username: String,
+        hostname: String,
+        snapshot_id: Option<u64>,
+        applied_runtime: Option<AppliedRuntimeConfig>,
+        applied_provisioning: Option<AppliedProvisioningConfig>,
+    ) -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            server_id,
+            ipv4,
+            username,
+            hostname,
+            snapshot_id,
+            applied_runtime,
+            applied_provisioning,
+        }
+    }
+
+    /// Returns the stored hostname, or falls back to `gob-{project_name}`.
+    pub fn hostname_or_default(&self, project_name: &str) -> String {
+        if self.hostname.is_empty() {
+            format!("gob-{}", project_name)
+        } else {
+            self.hostname.clone()
+        }
+    }
 }
 
 fn default_username() -> String {
@@ -160,8 +199,15 @@ pub fn load_state(project_id: &str) -> Result<Option<ProjectState>> {
         .with_context(|| format!("Failed to read state from {}", path.display()))?;
     let mut state: ProjectState = serde_json::from_str(&contents)
         .with_context(|| format!("Failed to parse state from {}", path.display()))?;
-    state.applied_runtime = state.applied_runtime.map(|r| r.migrate());
-    state.applied_provisioning = state.applied_provisioning.map(|p| p.migrate());
+
+    if state.version < CURRENT_VERSION {
+        state.applied_runtime = state.applied_runtime.map(|r| r.migrate());
+        state.applied_provisioning = state.applied_provisioning.map(|p| p.migrate());
+        state.version = CURRENT_VERSION;
+        // Re-save so future loads skip migration.
+        save_state(project_id, &state)?;
+    }
+
     Ok(Some(state))
 }
 
@@ -193,6 +239,7 @@ mod tests {
     #[test]
     fn state_round_trip() {
         let state = ProjectState {
+            version: 0,
             server_id: 12345,
             ipv4: "1.2.3.4".to_string(),
             username: "testuser".to_string(),
@@ -220,6 +267,7 @@ mod tests {
     #[test]
     fn snapshot_id_round_trips() {
         let state = ProjectState {
+            version: 0,
             server_id: 1,
             ipv4: "1.2.3.4".to_string(),
             username: "u".to_string(),
