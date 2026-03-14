@@ -10,3 +10,6 @@ ci:
 
 cov-baseline:
     cargo llvm-cov nextest --json | python3 scripts/check_coverage.py --save-baseline
+
+install:
+    cargo install --path .
