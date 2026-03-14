@@ -72,8 +72,16 @@ pub fn build_cloud_init(
     let has_cargo_binstall = packages
         .iter()
         .any(|p| matches!(p, PackageSpec::CargoBinstall { .. }));
+    let has_npm = packages
+        .iter()
+        .any(|p| matches!(p, PackageSpec::Npm { .. }));
 
     let mut extra_cmds = String::new();
+    if has_npm {
+        extra_cmds.push_str(
+            "\n  - curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -\n  - apt-get install -y nodejs",
+        );
+    }
     if has_cargo_binstall {
         extra_cmds.push_str(&format!(
             "\n  - su - {username} -c \"curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash\""
@@ -184,6 +192,16 @@ mod tests {
     fn cloud_init_with_cargo_packages() {
         let packages = vec![PackageSpec::CargoBinstall {
             name: "jj-cli".to_string(),
+        }];
+        let output = test_cloud_init(&[], &packages);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn cloud_init_with_npm_packages() {
+        let packages = vec![PackageSpec::Npm {
+            name: "pi".to_string(),
+            package: "@mariozechner/pi-coding-agent".to_string(),
         }];
         let output = test_cloud_init(&[], &packages);
         insta::assert_snapshot!(output);

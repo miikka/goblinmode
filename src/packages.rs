@@ -7,6 +7,7 @@ pub enum PackageSpec {
     Apt { name: String },
     CurlInstaller { name: String, url: String },
     CargoBinstall { name: String },
+    Npm { name: String, package: String },
 }
 
 impl PackageSpec {
@@ -16,6 +17,7 @@ impl PackageSpec {
             PackageSpec::Apt { name } => name,
             PackageSpec::CurlInstaller { name, .. } => name,
             PackageSpec::CargoBinstall { name } => name,
+            PackageSpec::Npm { name, .. } => name,
         }
     }
 
@@ -32,6 +34,9 @@ impl PackageSpec {
             PackageSpec::CargoBinstall { name } => Some(format!(
                 "su - {username} -c \"/home/{username}/.cargo/bin/cargo-binstall --no-confirm --strategies crate-meta-data {name}\""
             )),
+            PackageSpec::Npm { package, .. } => {
+                Some(format!("su - {username} -c 'npm install -g {package}'"))
+            }
         }
     }
 
@@ -47,6 +52,9 @@ impl PackageSpec {
                 Some(format!("su - {username} -c 'curl -fsSL {url} | bash'"))
             }
             PackageSpec::CargoBinstall { .. } => None,
+            PackageSpec::Npm { package, .. } => {
+                Some(format!("su - {username} -c 'npm install -g {package}'"))
+            }
         }
     }
 }
@@ -62,6 +70,10 @@ pub fn resolve_coding_agent(name: &str) -> Option<PackageSpec> {
         "opencode" => Some(PackageSpec::CurlInstaller {
             name: "opencode".to_string(),
             url: "https://opencode.ai/install".to_string(),
+        }),
+        "pi" => Some(PackageSpec::Npm {
+            name: "pi".to_string(),
+            package: "@mariozechner/pi-coding-agent".to_string(),
         }),
         _ => None,
     }
@@ -129,6 +141,10 @@ mod tests {
 
         let opencode = resolve_coding_agent("opencode").unwrap();
         assert_eq!(opencode.name(), "opencode");
+
+        let pi = resolve_coding_agent("pi").unwrap();
+        assert_eq!(pi.name(), "pi");
+        assert!(matches!(pi, PackageSpec::Npm { .. }));
 
         assert!(resolve_coding_agent("unknown-agent").is_none());
     }

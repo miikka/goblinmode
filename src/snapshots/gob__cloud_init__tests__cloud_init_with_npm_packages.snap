@@ -1,0 +1,34 @@
+---
+source: src/cloud_init.rs
+expression: output
+---
+#cloud-config
+timezone: UTC
+users:
+  - name: testuser
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/zsh
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA
+
+ssh_pwauth: false
+
+package_update: true
+packages:
+  - git
+  - stow
+  - zsh
+  - tmux
+  - mosh
+  - just
+  - socat
+  - bubblewrap
+
+runcmd:
+  - sed -i 's/^PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --auth-key=tskey-auth-xxx --ssh
+  - curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+  - apt-get install -y nodejs
+  - su - testuser -c 'npm install -g @mariozechner/pi-coding-agent'
