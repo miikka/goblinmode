@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::env;
 use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
@@ -15,10 +16,11 @@ pub struct SshSession {
 impl SshSession {
     pub fn new(username: &str, ip: &str) -> Self {
         let sanitized_ip = ip.replace(['.', ':'], "_");
+        let control_path = env::temp_dir().join(format!("gob-ssh-{}-{}", username, sanitized_ip));
         Self {
             username: username.to_string(),
             ip: ip.to_string(),
-            control_path: format!("/tmp/gob-ssh-{}-{}", username, sanitized_ip),
+            control_path: control_path.to_str().unwrap().to_owned(),
         }
     }
 
