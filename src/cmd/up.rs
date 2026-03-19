@@ -11,7 +11,7 @@ use crate::hetzner::HetznerClient;
 use crate::packages::PackageSpec;
 use crate::project;
 use crate::project_config;
-use crate::ssh;
+use crate::ssh::{self, SshSession};
 use crate::state;
 use crate::tailscale::TailscaleClient;
 
@@ -76,10 +76,10 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         info!(server_id = existing.server_id, ip = %ip, "existing_server_running");
                         println!("running");
                         let username = existing.username.clone();
-                        ssh::wait_for_ssh(&username, &ip)?;
+                        let sess = SshSession::new(&username, &ip);
+                        ssh::wait_for_ssh(&sess)?;
                         reconcile_runtime_config(
-                            &username,
-                            &ip,
+                            &sess,
                             existing.applied_runtime.as_ref(),
                             &current_runtime,
                         );
@@ -203,27 +203,28 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     );
     state::save_state(&project.id, &project_state)?;
 
-    // 8. Wait for SSH
-    ssh::wait_for_ssh(&username, &ip)?;
+    // 8. Wait for SSH (also establishes the ControlMaster socket for subsequent operations)
+    let sess = SshSession::new(&username, &ip);
+    ssh::wait_for_ssh(&sess)?;
 
     // 9. Wait for cloud-init to finish (packages, tailscale, etc.)
-    ssh::wait_for_cloud_init(&username, &ip)?;
+    ssh::wait_for_cloud_init(&sess)?;
 
     // 10. Configure tailscale serve ports
-    setup_tailscale_serve(&username, &ip, &project_config.serve_ports);
+    setup_tailscale_serve(&sess, &project_config.serve_ports);
 
     // 11. Init git repo and push project to VM
-    init_vm_repo(&username, &ip, &project.name)?;
-    push_to_vm(&project.root, &username, &server_name, &ip, &project.name)?;
+    init_vm_repo(&sess, &project.name)?;
+    push_to_vm(&project.root, &sess, &server_name, &project.name)?;
 
     // 12. Setup VM origin and SSH key
-    setup_vm_origin(&username, &ip, &project.root, &project.name);
-    setup_vm_ssh_key(&username, &ip);
+    setup_vm_origin(&sess, &project.root, &project.name);
+    setup_vm_ssh_key(&sess);
 
     // 13. Setup dotfiles
     if let Some(ref repo) = cfg.dotfiles_repo {
         let install_cmd = cfg.dotfiles_install.as_deref().unwrap_or("./install.sh");
-        setup_dotfiles(&username, &ip, repo, install_cmd);
+        setup_dotfiles(&sess, repo, install_cmd);
     }
 
     Ok(Env {
@@ -372,14 +373,12 @@ fn runtime_config_delta(
 }
 
 fn reconcile_runtime_config(
-    username: &str,
-    ip: &str,
+    sess: &SshSession,
     previous: Option<&state::AppliedRuntimeConfig>,
     current: &state::AppliedRuntimeConfig,
 ) {
-    let target = format!("{}@{}", username, ip);
-    reconcile_runtime_config_with(username, previous, current, |remote_cmd| {
-        ssh::run_remote_status(&target, remote_cmd)
+    reconcile_runtime_config_with(sess.username(), previous, current, |remote_cmd| {
+        ssh::run_remote_status(sess, remote_cmd)
             .map(|s| s.success())
             .unwrap_or(false)
     });
@@ -506,16 +505,16 @@ fn restore_from_snapshot(
     );
     state::save_state(&project.id, &project_state)?;
 
-    // Wait for SSH
-    ssh::wait_for_ssh(&username, &ip)?;
+    // Wait for SSH (also establishes the ControlMaster socket for subsequent operations)
+    let sess = SshSession::new(&username, &ip);
+    ssh::wait_for_ssh(&sess)?;
 
     // Re-authenticate tailscale
     print!("Re-authenticating Tailscale... ");
     io::stdout().flush()?;
     let tailscale_auth_key = resolve_tailscale_auth_key(cfg)?;
     match ssh::run_ssh_cmd(
-        &username,
-        &ip,
+        &sess,
         &format!("sudo tailscale up --auth-key={} --ssh", tailscale_auth_key),
     ) {
         Ok(output) if output.status.success() => println!("ok"),
@@ -530,20 +529,15 @@ fn restore_from_snapshot(
     }
 
     // Configure tailscale serve ports
-    reconcile_runtime_config(
-        &username,
-        &ip,
-        existing.applied_runtime.as_ref(),
-        &current_runtime,
-    );
+    reconcile_runtime_config(&sess, existing.applied_runtime.as_ref(), &current_runtime);
     warn_for_provisioning_changes(
         existing.applied_provisioning.as_ref(),
         &current_provisioning,
     );
 
     // Push project and re-copy SSH key (repo and origin are in the snapshot)
-    push_to_vm(&project.root, &username, &server_name, &ip, &project.name)?;
-    setup_vm_ssh_key(&username, &ip);
+    push_to_vm(&project.root, &sess, &server_name, &project.name)?;
+    setup_vm_ssh_key(&sess);
 
     // Delete old snapshot
     print!("Cleaning up snapshot... ");
@@ -560,13 +554,13 @@ fn restore_from_snapshot(
     })
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip, project_name = project_name))]
-fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
+#[instrument(level = "info", skip_all, fields(username = %sess.username(), ip = %sess.ip(), project_name = project_name))]
+fn init_vm_repo(sess: &SshSession, project_name: &str) -> Result<()> {
     println!("Initializing git repo on VM...");
     let remote_cmd = format!(
         "mkdir -p ~/{project_name} && cd ~/{project_name} && git init && git config receive.denyCurrentBranch updateInstead"
     );
-    let output = ssh::run_ssh_cmd(username, ip, &remote_cmd)?;
+    let output = ssh::run_ssh_cmd(sess, &remote_cmd)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -580,17 +574,16 @@ fn init_vm_repo(username: &str, ip: &str, project_name: &str) -> Result<()> {
     level = "info",
     skip_all,
     fields(
-        username = username,
+        username = %sess.username(),
         hostname = hostname,
-        ip = ip,
+        ip = %sess.ip(),
         project_name = project_name
     )
 )]
 fn push_to_vm(
     project_root: &std::path::Path,
-    username: &str,
+    sess: &SshSession,
     hostname: &str,
-    ip: &str,
     project_name: &str,
 ) -> Result<()> {
     println!("Pushing project to VM...");
@@ -608,7 +601,7 @@ fn push_to_vm(
     // Use the server IP rather than the Tailscale hostname so that the push
     // works even when the VM has not yet joined the tailnet (e.g. cloud-init
     // just finished and Tailscale MagicDNS hasn't propagated yet).
-    let remote_url = format!("{}@{}:~/{}/", username, ip, project_name);
+    let remote_url = format!("{}@{}:~/{}/", sess.username(), sess.ip(), project_name);
 
     // Remove existing remote if present, ignore errors
     let _ = Command::new("git")
@@ -632,7 +625,7 @@ fn push_to_vm(
         .output()
         .context("Failed to run git")?;
 
-    let ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new";
+    let ssh_cmd = sess.git_ssh_command();
 
     let branch = if branch_output.status.success() {
         String::from_utf8_lossy(&branch_output.stdout)
@@ -645,7 +638,7 @@ fn push_to_vm(
     let push_status = if branch_output.status.success() {
         Command::new("git")
             .args(["push", "gob", &branch])
-            .env("GIT_SSH_COMMAND", ssh_cmd)
+            .env("GIT_SSH_COMMAND", &ssh_cmd)
             .current_dir(project_root)
             .status()
             .context("Failed to run git push")?
@@ -653,7 +646,7 @@ fn push_to_vm(
         // Detached HEAD — push as main
         Command::new("git")
             .args(["push", "gob", "HEAD:refs/heads/main"])
-            .env("GIT_SSH_COMMAND", ssh_cmd)
+            .env("GIT_SSH_COMMAND", &ssh_cmd)
             .current_dir(project_root)
             .status()
             .context("Failed to run git push")?
@@ -665,8 +658,7 @@ fn push_to_vm(
 
     // Checkout the pushed branch on the VM
     let checkout_output = ssh::run_ssh_cmd(
-        username,
-        ip,
+        sess,
         &format!("cd ~/{} && git checkout {}", project_name, branch),
     )?;
     if !checkout_output.status.success() {
@@ -682,8 +674,8 @@ fn push_to_vm(
     Ok(())
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip, project_name = project_name))]
-fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, project_name: &str) {
+#[instrument(level = "info", skip_all, fields(username = %sess.username(), ip = %sess.ip(), project_name = project_name))]
+fn setup_vm_origin(sess: &SshSession, project_root: &std::path::Path, project_name: &str) {
     // Get local origin URL
     let origin_output = Command::new("git")
         .args(["remote", "get-url", "origin"])
@@ -703,15 +695,15 @@ fn setup_vm_origin(username: &str, ip: &str, project_root: &std::path::Path, pro
     let remote_cmd = format!(
         "cd ~/{project_name} && git remote remove origin 2>/dev/null; git remote add origin {origin_url} && git branch --set-upstream-to=origin/$(git rev-parse --abbrev-ref HEAD) $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true"
     );
-    match ssh::run_ssh_cmd(username, ip, &remote_cmd) {
+    match ssh::run_ssh_cmd(sess, &remote_cmd) {
         Ok(output) if output.status.success() => println!("  VM origin set to {}", origin_url),
         Ok(_) => eprintln!("Warning: failed to set origin remote on VM"),
         Err(e) => eprintln!("Warning: failed to set origin remote on VM: {}", e),
     }
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip))]
-fn setup_vm_ssh_key(username: &str, ip: &str) {
+#[instrument(level = "info", skip_all, fields(username = %sess.username(), ip = %sess.ip()))]
+fn setup_vm_ssh_key(sess: &SshSession) {
     println!("Setting up SSH key on VM...");
 
     let data_dir = match dirs::data_dir() {
@@ -759,12 +751,11 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
         }
     }
 
-    let target = format!("{}@{}", username, ip);
-
-    // SCP private and public key to VM
+    // SCP private and public key to VM using the existing control socket.
     if !ssh::scp_file(
+        sess,
         &private_key_path.to_string_lossy(),
-        &format!("{}:~/.ssh/id_ed25519", target),
+        &format!("{}:~/.ssh/id_ed25519", sess.target()),
     )
     .unwrap_or(false)
     {
@@ -773,8 +764,9 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     }
 
     if !ssh::scp_file(
+        sess,
         &public_key_path.to_string_lossy(),
-        &format!("{}:~/.ssh/id_ed25519.pub", target),
+        &format!("{}:~/.ssh/id_ed25519.pub", sess.target()),
     )
     .unwrap_or(false)
     {
@@ -789,7 +781,7 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
         "chmod 600 ~/.ssh/id_ed25519 && echo '{}' >> ~/.ssh/config && chmod 600 ~/.ssh/config",
         ssh_config
     );
-    let _ = ssh::run_ssh_cmd(username, ip, &remote_cmd);
+    let _ = ssh::run_ssh_cmd(sess, &remote_cmd);
 
     // Print public key for user
     if let Ok(pubkey) = fs::read_to_string(&public_key_path) {
@@ -798,8 +790,8 @@ fn setup_vm_ssh_key(username: &str, ip: &str) {
     }
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip, repo = repo))]
-fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
+#[instrument(level = "info", skip_all, fields(username = %sess.username(), ip = %sess.ip(), repo = repo))]
+fn setup_dotfiles(sess: &SshSession, repo: &str, install_cmd: &str) {
     println!("Setting up dotfiles...");
 
     let remote_cmd = format!(
@@ -807,7 +799,7 @@ fn setup_dotfiles(username: &str, ip: &str, repo: &str, install_cmd: &str) {
         repo, install_cmd
     );
 
-    match ssh::run_ssh_cmd(username, ip, &remote_cmd) {
+    match ssh::run_ssh_cmd(sess, &remote_cmd) {
         Ok(output) if output.status.success() => println!("  Dotfiles installed"),
         Ok(output) => eprintln!(
             "Warning: dotfiles setup failed (exit code {})",
@@ -838,11 +830,10 @@ where
     }
 }
 
-#[instrument(level = "info", skip_all, fields(username = username, ip = ip, ports = ?ports))]
-fn setup_tailscale_serve(username: &str, ip: &str, ports: &[u16]) {
-    let target = format!("{}@{}", username, ip);
+#[instrument(level = "info", skip_all, fields(username = %sess.username(), ip = %sess.ip(), ports = ?ports))]
+fn setup_tailscale_serve(sess: &SshSession, ports: &[u16]) {
     reconcile_tailscale_serve_with(ports, &mut |remote_cmd| {
-        ssh::run_remote_status(&target, remote_cmd)
+        ssh::run_remote_status(sess, remote_cmd)
             .map(|s| s.success())
             .unwrap_or(false)
     });

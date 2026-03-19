@@ -1,9 +1,9 @@
 {
-  "created": "2026-03-03T07:44:48.096076+00:00",
+  "created": "2026-03-03T09:11:33.432222+00:00",
   "total": {
-    "percent": 69.61715992397502,
+    "percent": 69.16644186673861,
     "covered": 2564,
-    "count": 3683
+    "count": 3707
   },
   "files": {
     "src/cloud_init.rs": {
@@ -37,9 +37,9 @@
       "count": 153
     },
     "src/cmd/up.rs": {
-      "percent": 45.71118349619978,
+      "percent": 46.06126914660831,
       "covered": 421,
-      "count": 921
+      "count": 914
     },
     "src/cmd/zed.rs": {
       "percent": 74.24242424242425,
@@ -84,7 +84,7 @@
     "src/ssh.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 68
+      "count": 99
     },
     "src/state.rs": {
       "percent": 80.86642599277978,
