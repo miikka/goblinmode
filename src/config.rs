@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::fs;
 use tracing::warn;
 
 use crate::packages::{resolve_coding_agent, PackageSpec};
@@ -60,57 +59,57 @@ pub fn load_config() -> Result<Config> {
 }
 
 fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
-    let config_file: Option<ConfigFile> = if config_path.exists() {
-        let contents = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read {}", config_path.display()))?;
-        Some(
-            toml::from_str(&contents)
-                .with_context(|| format!("Failed to parse {}", config_path.display()))?,
+    let raw = config::Config::builder()
+        .add_source(
+            config::File::from(config_path.as_path())
+                .required(false)
+                .format(config::FileFormat::Toml),
         )
-    } else {
-        None
-    };
+        .add_source(config::Environment::default().separator("__"))
+        .build()
+        .with_context(|| format!("Failed to parse config from {}", config_path.display()))?;
+
+    let config_file: ConfigFile = raw
+        .try_deserialize()
+        .with_context(|| format!("Failed to parse config from {}", config_path.display()))?;
 
     let config_path_display = config_path.display();
 
-    let hetzner = config_file.as_ref().and_then(|c| c.hetzner.as_ref());
-    let hetzner_api_token = resolve_secret(
-        "HETZNER_API_TOKEN",
-        hetzner.and_then(|h| h.api_token_cmd.as_deref()),
+    let hetzner = config_file.hetzner.as_ref();
+    let hetzner_api_token = resolve_value_with_cmd(
         hetzner.and_then(|h| h.api_token.as_deref()),
+        hetzner.and_then(|h| h.api_token_cmd.as_deref()),
     )
     .context("Failed to retrieve Hetzner API token")?
     .context(format!(
         "Hetzner API token not found.\n\
-         Set HETZNER_API_TOKEN env var or add to {config_path_display}:\n\n\
+         Set HETZNER__API_TOKEN env var or add to {config_path_display}:\n\n\
          [hetzner]\n\
          api_token = \"your-token-here\""
     ))?;
 
-    let tailscale = config_file.as_ref().and_then(|c| c.tailscale.as_ref());
-    let tailscale_api_key = resolve_secret(
-        "TAILSCALE_API_KEY",
-        tailscale.and_then(|t| t.api_key_cmd.as_deref()),
+    let tailscale = config_file.tailscale.as_ref();
+    let tailscale_api_key = resolve_value_with_cmd(
         tailscale.and_then(|t| t.api_key.as_deref()),
+        tailscale.and_then(|t| t.api_key_cmd.as_deref()),
     )
     .context("Failed to retrieve Tailscale API key")?
     .context(format!(
         "Tailscale API key not found.\n\
-         Set TAILSCALE_API_KEY env var or add to {config_path_display}:\n\n\
+         Set TAILSCALE__API_KEY env var or add to {config_path_display}:\n\n\
          [tailscale]\n\
          api_key = \"tskey-api-...\""
     ))?;
 
-    let tailscale_auth_key = resolve_secret(
-        "TAILSCALE_AUTH_KEY",
-        tailscale.and_then(|t| t.auth_key_cmd.as_deref()),
+    let tailscale_auth_key = resolve_value_with_cmd(
         tailscale.and_then(|t| t.auth_key.as_deref()),
+        tailscale.and_then(|t| t.auth_key_cmd.as_deref()),
     )
     .context("Failed to retrieve Tailscale auth key")?;
 
     let tailscale_tags = tailscale.and_then(|t| t.tags.clone()).unwrap_or_default();
 
-    let dotfiles = config_file.as_ref().and_then(|c| c.dotfiles.as_ref());
+    let dotfiles = config_file.dotfiles.as_ref();
     let dotfiles_repo = dotfiles
         .and_then(|d| d.repo.clone())
         .filter(|v| !v.is_empty());
@@ -118,7 +117,7 @@ fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
         .and_then(|d| d.install.clone())
         .filter(|v| !v.is_empty());
 
-    let vm = config_file.as_ref().and_then(|c| c.vm.as_ref());
+    let vm = config_file.vm.as_ref();
 
     let mut vm_packages: Vec<PackageSpec> = vm
         .and_then(|v| v.packages.as_ref())
@@ -171,15 +170,14 @@ fn run_secret_cmd(cmd: &str) -> Result<String> {
         .to_string())
 }
 
-pub(crate) fn resolve_secret(
-    env_var: &str,
+/// Resolves a config value: returns `value` if non-empty, otherwise executes `cmd` as a
+/// shell command and returns its trimmed output. Returns `None` if both are absent/empty.
+pub(crate) fn resolve_value_with_cmd(
+    value: Option<&str>,
     cmd: Option<&str>,
-    file_value: Option<&str>,
 ) -> Result<Option<String>> {
-    if let Ok(val) = std::env::var(env_var) {
-        if !val.is_empty() {
-            return Ok(Some(val));
-        }
+    if let Some(val) = value.filter(|v| !v.is_empty()) {
+        return Ok(Some(val.to_string()));
     }
     if let Some(cmd) = cmd {
         let val = run_secret_cmd(cmd)?;
@@ -187,7 +185,7 @@ pub(crate) fn resolve_secret(
             return Ok(Some(val));
         }
     }
-    Ok(file_value.filter(|v| !v.is_empty()).map(|s| s.to_string()))
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -195,12 +193,10 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Mutex to serialize tests that mutate shared env vars like HETZNER_API_TOKEN.
-    /// Callers must acquire this before calling `with_env_locked`.
+    /// Mutex to serialize tests that mutate shared env vars.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Set env vars, run f, then restore the original values.
-    /// Caller must hold `ENV_MUTEX` before calling this (pass the guard to prove it).
     fn with_env_locked<F: FnOnce() -> R, R>(
         _guard: &std::sync::MutexGuard<()>,
         vars: &[(&str, Option<&str>)],
@@ -229,7 +225,7 @@ mod tests {
     /// Write a temp config file and return its path.
     fn write_temp_config(dir: &tempfile::TempDir, contents: &str) -> std::path::PathBuf {
         let path = dir.path().join("config.toml");
-        fs::write(&path, contents).unwrap();
+        std::fs::write(&path, contents).unwrap();
         path
     }
 
@@ -243,9 +239,9 @@ mod tests {
         let config = with_env_locked(
             &guard,
             &[
-                ("HETZNER_API_TOKEN", Some("htoken")),
-                ("TAILSCALE_API_KEY", Some("tsapi")),
-                ("TAILSCALE_AUTH_KEY", None),
+                ("HETZNER__API_TOKEN", Some("htoken")),
+                ("TAILSCALE__API_KEY", Some("tsapi")),
+                ("TAILSCALE__AUTH_KEY", None),
             ],
             || load_config_from(path).unwrap(),
         );
@@ -284,9 +280,9 @@ cargo_packages = ["jj-cli"]
         let config = with_env_locked(
             &guard,
             &[
-                ("HETZNER_API_TOKEN", None),
-                ("TAILSCALE_API_KEY", None),
-                ("TAILSCALE_AUTH_KEY", None),
+                ("HETZNER__API_TOKEN", None),
+                ("TAILSCALE__API_KEY", None),
+                ("TAILSCALE__AUTH_KEY", None),
             ],
             || load_config_from(path).unwrap(),
         );
@@ -326,7 +322,7 @@ cargo_packages = ["jj-cli"]
         let path = dir.path().join("nonexistent.toml");
         let result = with_env_locked(
             &guard,
-            &[("HETZNER_API_TOKEN", None), ("TAILSCALE_API_KEY", None)],
+            &[("HETZNER__API_TOKEN", None), ("TAILSCALE__API_KEY", None)],
             || load_config_from(path),
         );
         assert!(result.is_err());
@@ -337,21 +333,19 @@ cargo_packages = ["jj-cli"]
     #[test]
     fn load_config_missing_tailscale_api_key_returns_error() {
         let guard = ENV_MUTEX.lock().unwrap();
-        // Pre-set HETZNER_API_TOKEN so the restore branch hits Some(v) → line 203.
-        std::env::set_var("HETZNER_API_TOKEN", "preexisting");
+        std::env::set_var("HETZNER__API_TOKEN", "preexisting");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.toml");
         let result = with_env_locked(
             &guard,
             &[
-                ("HETZNER_API_TOKEN", Some("htoken")),
-                ("TAILSCALE_API_KEY", None),
+                ("HETZNER__API_TOKEN", Some("htoken")),
+                ("TAILSCALE__API_KEY", None),
             ],
             || load_config_from(path),
         );
-        // HETZNER_API_TOKEN should be restored to "preexisting"
-        assert_eq!(std::env::var("HETZNER_API_TOKEN").unwrap(), "preexisting");
-        std::env::remove_var("HETZNER_API_TOKEN");
+        assert_eq!(std::env::var("HETZNER__API_TOKEN").unwrap(), "preexisting");
+        std::env::remove_var("HETZNER__API_TOKEN");
         assert!(result.is_err());
         let msg = format!("{:#}", result.err().unwrap());
         assert!(msg.contains("Tailscale API key not found"), "got: {msg}");
@@ -364,7 +358,7 @@ cargo_packages = ["jj-cli"]
         let path = write_temp_config(&dir, "this is not valid toml ][[[");
         let result = with_env_locked(
             &guard,
-            &[("HETZNER_API_TOKEN", None), ("TAILSCALE_API_KEY", None)],
+            &[("HETZNER__API_TOKEN", None), ("TAILSCALE__API_KEY", None)],
             || load_config_from(path),
         );
         assert!(result.is_err());
@@ -391,9 +385,9 @@ install = ""
         let config = with_env_locked(
             &guard,
             &[
-                ("HETZNER_API_TOKEN", None),
-                ("TAILSCALE_API_KEY", None),
-                ("TAILSCALE_AUTH_KEY", None),
+                ("HETZNER__API_TOKEN", None),
+                ("TAILSCALE__API_KEY", None),
+                ("TAILSCALE__AUTH_KEY", None),
             ],
             || load_config_from(path).unwrap(),
         );
@@ -403,16 +397,13 @@ install = ""
 
     #[test]
     fn load_config_delegates_to_load_config_from() {
-        // Exercises load_config() lines 51-57 (path resolution + delegation).
-        // We provide both required tokens via env vars so it succeeds regardless
-        // of whether a real config file exists (env vars take priority).
         let guard = ENV_MUTEX.lock().unwrap();
         let config = with_env_locked(
             &guard,
             &[
-                ("HETZNER_API_TOKEN", Some("env-htoken")),
-                ("TAILSCALE_API_KEY", Some("env-tsapi")),
-                ("TAILSCALE_AUTH_KEY", None),
+                ("HETZNER__API_TOKEN", Some("env-htoken")),
+                ("TAILSCALE__API_KEY", Some("env-tsapi")),
+                ("TAILSCALE__AUTH_KEY", None),
             ],
             || load_config().unwrap(),
         );
@@ -420,79 +411,59 @@ install = ""
         assert_eq!(config.tailscale_api_key, "env-tsapi");
     }
 
-    // --- resolve_secret tests ---
+    // --- resolve_value_with_cmd tests ---
 
     #[test]
-    fn resolve_secret_env_var_takes_priority() {
-        let key = "GOB_TEST_SECRET_PRIORITY";
-        std::env::set_var(key, "from_env");
-        let result = resolve_secret(key, Some("echo from_cmd"), Some("from_file")).unwrap();
-        std::env::remove_var(key);
-        assert_eq!(result, Some("from_env".to_string()));
+    fn resolve_value_with_cmd_value_takes_priority() {
+        let result = resolve_value_with_cmd(Some("from_value"), Some("echo from_cmd")).unwrap();
+        assert_eq!(result, Some("from_value".to_string()));
     }
 
     #[test]
-    fn resolve_secret_cmd_used_when_no_env_var() {
-        let key = "GOB_TEST_SECRET_CMD";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, Some("echo hello"), Some("from_file")).unwrap();
+    fn resolve_value_with_cmd_cmd_used_when_no_value() {
+        let result = resolve_value_with_cmd(None, Some("echo hello")).unwrap();
         assert_eq!(result, Some("hello".to_string()));
     }
 
     #[test]
-    fn resolve_secret_falls_back_to_file_value() {
-        let key = "GOB_TEST_SECRET_FILE";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, None, Some("from_file")).unwrap();
-        assert_eq!(result, Some("from_file".to_string()));
+    fn resolve_value_with_cmd_returns_value_when_no_cmd() {
+        let result = resolve_value_with_cmd(Some("from_value"), None).unwrap();
+        assert_eq!(result, Some("from_value".to_string()));
     }
 
     #[test]
-    fn resolve_secret_all_absent_returns_none() {
-        let key = "GOB_TEST_SECRET_NONE";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, None, None).unwrap();
+    fn resolve_value_with_cmd_all_absent_returns_none() {
+        let result = resolve_value_with_cmd(None, None).unwrap();
         assert_eq!(result, None);
     }
 
     #[test]
-    fn resolve_secret_empty_env_skipped() {
-        let key = "GOB_TEST_SECRET_EMPTY_ENV";
-        std::env::set_var(key, "");
-        let result = resolve_secret(key, None, Some("from_file")).unwrap();
-        std::env::remove_var(key);
-        assert_eq!(result, Some("from_file".to_string()));
+    fn resolve_value_with_cmd_empty_value_tries_cmd() {
+        let result = resolve_value_with_cmd(Some(""), Some("echo fallback")).unwrap();
+        assert_eq!(result, Some("fallback".to_string()));
     }
 
     #[test]
-    fn resolve_secret_empty_file_value_returns_none() {
-        let key = "GOB_TEST_SECRET_EMPTY_FILE";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, None, Some("")).unwrap();
+    fn resolve_value_with_cmd_empty_value_no_cmd_returns_none() {
+        let result = resolve_value_with_cmd(Some(""), None).unwrap();
         assert_eq!(result, None);
     }
 
     #[test]
-    fn resolve_secret_cmd_output_is_trimmed() {
-        let key = "GOB_TEST_SECRET_TRIM";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, Some("printf '  trimmed  '"), None).unwrap();
+    fn resolve_value_with_cmd_output_is_trimmed() {
+        let result = resolve_value_with_cmd(None, Some("printf '  trimmed  '")).unwrap();
         assert_eq!(result, Some("trimmed".to_string()));
     }
 
     #[test]
-    fn resolve_secret_cmd_failure_returns_error() {
-        let key = "GOB_TEST_SECRET_CMD_FAIL";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, Some("exit 1"), None);
+    fn resolve_value_with_cmd_cmd_failure_returns_error() {
+        let result = resolve_value_with_cmd(None, Some("exit 1"));
         assert!(result.is_err());
     }
 
     #[test]
-    fn resolve_secret_empty_cmd_output_falls_through_to_file() {
-        let key = "GOB_TEST_SECRET_CMD_EMPTY";
-        std::env::remove_var(key);
-        let result = resolve_secret(key, Some("true"), Some("from_file")).unwrap();
-        assert_eq!(result, Some("from_file".to_string()));
+    fn resolve_value_with_cmd_empty_cmd_output_returns_none() {
+        let result = resolve_value_with_cmd(None, Some("true")).unwrap();
+        assert_eq!(result, None);
     }
 }
