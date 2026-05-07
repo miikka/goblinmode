@@ -27,7 +27,7 @@ struct ConfigFile {
 struct VmConfig {
     packages: Option<Vec<String>>,
     coding_agents: Option<Vec<String>>,
-    cargo_packages: Option<Vec<String>>,
+    binstall_packages: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -138,7 +138,7 @@ fn load_config_from(config_path: std::path::PathBuf) -> Result<Config> {
         }
     }
 
-    if let Some(cargo_pkgs) = vm.and_then(|v| v.cargo_packages.as_ref()) {
+    if let Some(cargo_pkgs) = vm.and_then(|v| v.binstall_packages.as_ref()) {
         for name in cargo_pkgs {
             vm_packages.push(PackageSpec::CargoBinstall { name: name.clone() });
         }
@@ -278,7 +278,7 @@ install = "./install.sh"
 [vm]
 packages = ["vim", "tmux"]
 coding_agents = ["claude-code"]
-cargo_packages = ["jj-cli"]
+binstall_packages = ["jj-cli"]
 "#;
         let path = write_temp_config(&dir, toml);
         let config = with_env_locked(
