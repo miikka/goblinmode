@@ -252,7 +252,7 @@ fn current_runtime_config(
         .map(|n| PackageSpec::Apt { name: n.clone() })
         .chain(
             project_config
-                .cargo_packages
+                .binstall_packages
                 .iter()
                 .map(|n| PackageSpec::CargoBinstall { name: n.clone() }),
         )
@@ -949,7 +949,7 @@ mod tests {
             serve_ports: vec![3000, 8080],
             server_type: "cx42".to_string(),
             packages: vec![],
-            cargo_packages: vec![],
+            binstall_packages: vec![],
         };
         let runtime = current_runtime_config(&cfg, &project_cfg);
         assert_eq!(
@@ -977,7 +977,7 @@ mod tests {
             serve_ports: vec![],
             server_type: "cx23".to_string(),
             packages: vec!["nodejs".to_string(), "jq".to_string()], // jq is a duplicate
-            cargo_packages: vec![],
+            binstall_packages: vec![],
         };
         let runtime = current_runtime_config(&cfg, &project_cfg);
         // jq appears in both lists but must not be duplicated
@@ -1010,7 +1010,7 @@ mod tests {
             serve_ports: vec![],
             server_type: "cx42".to_string(),
             packages: vec![],
-            cargo_packages: vec![],
+            binstall_packages: vec![],
         };
         let provisioning = current_provisioning_config(
             &test_project(dir.path().to_path_buf()),

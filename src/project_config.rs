@@ -18,7 +18,7 @@ pub struct ProjectConfig {
     pub packages: Vec<String>,
     /// Extra cargo-binstall packages installed on this project's VM.
     #[serde(default)]
-    pub cargo_packages: Vec<String>,
+    pub binstall_packages: Vec<String>,
 }
 
 impl Default for ProjectConfig {
@@ -27,7 +27,7 @@ impl Default for ProjectConfig {
             serve_ports: Vec::new(),
             server_type: default_server_type(),
             packages: Vec::new(),
-            cargo_packages: Vec::new(),
+            binstall_packages: Vec::new(),
         }
     }
 }
@@ -52,7 +52,7 @@ mod tests {
         assert_eq!(config.server_type, "cx23");
         assert!(config.serve_ports.is_empty());
         assert!(config.packages.is_empty());
-        assert!(config.cargo_packages.is_empty());
+        assert!(config.binstall_packages.is_empty());
     }
 
     #[test]
@@ -62,7 +62,7 @@ mod tests {
         assert_eq!(config.server_type, "cx23");
         assert!(config.serve_ports.is_empty());
         assert!(config.packages.is_empty());
-        assert!(config.cargo_packages.is_empty());
+        assert!(config.binstall_packages.is_empty());
     }
 
     #[test]
@@ -109,17 +109,17 @@ mod tests {
     }
 
     #[test]
-    fn cargo_packages_parse() {
+    fn binstall_packages_parse() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".config");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(
             config_dir.join("goblinmode.toml"),
-            "cargo_packages = [\"jj-cli\"]\n",
+            "binstall_packages = [\"jj-cli\"]\n",
         )
         .unwrap();
         let config = load_project_config(dir.path()).unwrap();
-        assert_eq!(config.cargo_packages, vec!["jj-cli"]);
+        assert_eq!(config.binstall_packages, vec!["jj-cli"]);
     }
 
     #[test]
