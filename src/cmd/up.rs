@@ -50,16 +50,21 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
             info!("reset_requested_teardown_existing");
             down::teardown(&project, &existing, &cfg)?;
         } else {
-            // 4a. Check for snapshot restore
+            // 4a. Check for snapshot restore (only when no server exists yet)
             if let Some(snapshot_id) = existing.snapshot_id {
-                return restore_from_snapshot(
-                    &project,
-                    &cfg,
-                    &client,
-                    snapshot_id,
-                    &existing,
-                    &project_config,
-                );
+                if existing.server_id == 0 {
+                    return restore_from_snapshot(
+                        &project,
+                        &cfg,
+                        &client,
+                        snapshot_id,
+                        &existing,
+                        &project_config,
+                    );
+                }
+                // server_id != 0: server was already created from snapshot but we
+                // crashed before deleting it. Fall through to check server status;
+                // the snapshot will be cleaned up in the "running" branch below.
             }
 
             if existing.server_id != 0 {
@@ -77,6 +82,18 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         let sess = SshSession::new(&username, &ip);
                         ssh::wait_for_ssh(&sess)?;
                         let hostname = existing.hostname_or_default(&project.name);
+                        // Clean up any snapshot left over from a crashed restore
+                        let snap = existing.snapshot_id;
+                        if let Some(snap_id) = snap {
+                            print!("Cleaning up snapshot... ");
+                            io::stdout().flush()?;
+                            match client.delete_image(snap_id) {
+                                Ok(()) => println!("done"),
+                                Err(e) => {
+                                    eprintln!("Warning: failed to delete snapshot: {}", e)
+                                }
+                            }
+                        }
                         state::save_state(
                             &project.id,
                             &state::ProjectState::new(
@@ -84,7 +101,7 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                                 ip,
                                 username.clone(),
                                 hostname.clone(),
-                                existing.snapshot_id,
+                                None,
                             ),
                         )?;
                         return Ok(Env {
@@ -303,13 +320,15 @@ fn restore_from_snapshot(
     );
     info!(server_id = server_id, "snapshot_server_created");
 
-    // Save state immediately so Ctrl-C doesn't orphan the server
+    // Save state immediately so Ctrl-C doesn't orphan the server.
+    // Keep snapshot_id so a future `gob up` can clean it up if we crash before
+    // deleting it.
     let project_state = state::ProjectState::new(
         server_id,
         initial_ip,
         username.clone(),
         server_name.clone(),
-        None,
+        Some(snapshot_id),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -317,13 +336,13 @@ fn restore_from_snapshot(
     println!("  Server running at {}", ip);
     info!(server_id = server_id, ip = %ip, "snapshot_server_running");
 
-    // Update state with final IP
+    // Update state with final IP, still tracking snapshot_id until deleted
     let project_state = state::ProjectState::new(
         server_id,
         ip.clone(),
         username.clone(),
         server_name.clone(),
-        None,
+        Some(snapshot_id),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -357,11 +376,26 @@ fn restore_from_snapshot(
     push_to_vm(&project.root, &sess, &server_name, &project.name)?;
     setup_vm_ssh_key(&sess);
 
-    // Delete old snapshot
+    // Delete old snapshot and clear it from state
     print!("Cleaning up snapshot... ");
     io::stdout().flush()?;
     match client.delete_image(snapshot_id) {
-        Ok(()) => println!("done"),
+        Ok(()) => {
+            println!("done");
+            let final_state = state::ProjectState::new(
+                server_id,
+                ip.clone(),
+                username.clone(),
+                server_name.clone(),
+                None,
+            );
+            if let Err(e) = state::save_state(&project.id, &final_state) {
+                eprintln!(
+                    "Warning: failed to update state after snapshot deletion: {}",
+                    e
+                );
+            }
+        }
         Err(e) => eprintln!("Warning: failed to delete snapshot: {}", e),
     }
 
