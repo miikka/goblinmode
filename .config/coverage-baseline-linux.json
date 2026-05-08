@@ -1,20 +1,20 @@
 {
-  "created": "2026-05-08T18:07:29.543109+00:00",
+  "created": "2026-03-03T09:11:33.432222+00:00",
   "total": {
-    "percent": 65.45397026257514,
-    "covered": 2069,
-    "count": 3161
+    "percent": 69.16644186673861,
+    "covered": 2564,
+    "count": 3707
   },
   "files": {
     "src/cloud_init.rs": {
-      "percent": 87.58169934640523,
-      "covered": 134,
-      "count": 153
+      "percent": 86.02941176470588,
+      "covered": 117,
+      "count": 136
     },
     "src/cmd/down.rs": {
-      "percent": 69.23076923076923,
-      "covered": 126,
-      "count": 182
+      "percent": 70.2127659574468,
+      "covered": 132,
+      "count": 188
     },
     "src/cmd/mosh.rs": {
       "percent": 73.84615384615385,
@@ -22,9 +22,9 @@
       "count": 65
     },
     "src/cmd/pause.rs": {
-      "percent": 70.98039215686275,
-      "covered": 181,
-      "count": 255
+      "percent": 72.28464419475654,
+      "covered": 193,
+      "count": 267
     },
     "src/cmd/prune.rs": {
       "percent": 76.49769585253456,
@@ -32,14 +32,14 @@
       "count": 217
     },
     "src/cmd/status.rs": {
-      "percent": 82.99319727891157,
-      "covered": 122,
-      "count": 147
+      "percent": 83.66013071895425,
+      "covered": 128,
+      "count": 153
     },
     "src/cmd/up.rs": {
-      "percent": 16.068052930056712,
-      "covered": 85,
-      "count": 529
+      "percent": 46.06126914660831,
+      "covered": 421,
+      "count": 914
     },
     "src/cmd/zed.rs": {
       "percent": 74.24242424242425,
@@ -67,9 +67,9 @@
       "count": 32
     },
     "src/packages.rs": {
-      "percent": 98.66666666666667,
-      "covered": 74,
-      "count": 75
+      "percent": 98.8095238095238,
+      "covered": 83,
+      "count": 84
     },
     "src/project.rs": {
       "percent": 53.48837209302325,
@@ -84,12 +84,12 @@
     "src/ssh.rs": {
       "percent": 0.0,
       "covered": 0,
-      "count": 100
+      "count": 99
     },
     "src/state.rs": {
-      "percent": 61.832061068702295,
-      "covered": 81,
-      "count": 131
+      "percent": 80.86642599277978,
+      "covered": 224,
+      "count": 277
     },
     "src/tailscale.rs": {
       "percent": 93.64161849710982,

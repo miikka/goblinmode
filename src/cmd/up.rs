@@ -782,4 +782,41 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name(), "nodejs");
     }
+
+    #[test]
+    fn reconcile_tailscale_serve_with_warns_on_reset_failure() {
+        let calls = RefCell::new(Vec::<String>::new());
+        reconcile_tailscale_serve_with(&[3000], &mut |cmd| {
+            calls.borrow_mut().push(cmd.to_string());
+            false
+        });
+        let calls = calls.into_inner();
+        assert!(calls.contains(&"sudo tailscale serve reset".to_string()));
+        assert!(calls.contains(&"sudo tailscale serve --bg 3000".to_string()));
+    }
+
+    #[test]
+    fn reconcile_tailscale_serve_with_empty_ports_only_resets() {
+        let calls = RefCell::new(Vec::<String>::new());
+        reconcile_tailscale_serve_with(&[], &mut |cmd| {
+            calls.borrow_mut().push(cmd.to_string());
+            true
+        });
+        assert_eq!(calls.into_inner(), vec!["sudo tailscale serve reset"]);
+    }
+
+    #[test]
+    fn resolve_tailscale_auth_key_returns_configured_key() {
+        let cfg = crate::config::Config {
+            hetzner_api_token: "h".to_string(),
+            tailscale_auth_key: Some("ts-key-configured".to_string()),
+            tailscale_api_key: "t".to_string(),
+            tailscale_tags: vec![],
+            dotfiles_repo: None,
+            dotfiles_install: None,
+            vm_packages: vec![],
+        };
+        let key = resolve_tailscale_auth_key(&cfg).unwrap();
+        assert_eq!(key, "ts-key-configured");
+    }
 }

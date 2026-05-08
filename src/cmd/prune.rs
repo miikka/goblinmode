@@ -316,4 +316,67 @@ mod tests {
             .borrow()
             .contains(&"Prune complete.".to_string()));
     }
+
+    struct FailingMockRunner {
+        hetzner_token: String,
+        tailscale_api_key: String,
+        servers: Vec<crate::hetzner::ServerInfo>,
+        snapshots: Vec<crate::hetzner::SnapshotInfo>,
+        devices: Vec<crate::tailscale::DeviceInfo>,
+        lines: RefCell<Vec<String>>,
+    }
+
+    impl PruneRunner for FailingMockRunner {
+        fn load_config_keys(&mut self) -> Result<(String, String)> {
+            Ok((self.hetzner_token.clone(), self.tailscale_api_key.clone()))
+        }
+
+        fn list_servers(&mut self, _: &str) -> Result<Vec<crate::hetzner::ServerInfo>> {
+            Ok(std::mem::take(&mut self.servers))
+        }
+
+        fn list_snapshots(&mut self, _: &str) -> Result<Vec<crate::hetzner::SnapshotInfo>> {
+            Ok(std::mem::take(&mut self.snapshots))
+        }
+
+        fn list_devices(&mut self, _: &str) -> Result<Vec<crate::tailscale::DeviceInfo>> {
+            Ok(std::mem::take(&mut self.devices))
+        }
+
+        fn confirm_delete_all(&mut self) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn delete_server(&mut self, _: &str, _: u64) -> Result<()> {
+            anyhow::bail!("server delete failed")
+        }
+
+        fn delete_image(&mut self, _: &str, _: u64) -> Result<()> {
+            anyhow::bail!("image delete failed")
+        }
+
+        fn delete_device(&mut self, _: &str, _: &str) -> Result<()> {
+            anyhow::bail!("device delete failed")
+        }
+
+        fn line(&mut self, message: String) {
+            self.lines.borrow_mut().push(message);
+        }
+    }
+
+    #[test]
+    fn run_with_reports_failed_deletions_and_continues() {
+        let mut runner = FailingMockRunner {
+            hetzner_token: "h".to_string(),
+            tailscale_api_key: "t".to_string(),
+            servers: vec![server(1, "gob-a")],
+            snapshots: vec![snapshot(2, "snap-a")],
+            devices: vec![device("d1", "gob-a")],
+            lines: RefCell::new(Vec::new()),
+        };
+        run_with(&mut runner).unwrap();
+        let lines = runner.lines.borrow();
+        assert!(lines.iter().any(|l| l.contains("failed")));
+        assert!(lines.contains(&"Prune complete.".to_string()));
+    }
 }
