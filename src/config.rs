@@ -466,4 +466,49 @@ install = ""
         let result = resolve_value_with_cmd(None, Some("true")).unwrap();
         assert_eq!(result, None);
     }
+
+    #[test]
+    fn load_config_unknown_coding_agent_is_skipped() {
+        let guard = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[hetzner]
+api_token = "token"
+
+[tailscale]
+api_key = "tskey"
+
+[vm]
+coding_agents = ["totally-unknown-agent-xyz"]
+"#;
+        let path = write_temp_config(&dir, toml);
+        let config = with_env_locked(
+            &guard,
+            &[
+                ("HETZNER__API_TOKEN", None),
+                ("TAILSCALE__API_KEY", None),
+                ("TAILSCALE__AUTH_KEY", None),
+            ],
+            || load_config_from(path).unwrap(),
+        );
+        assert!(config.vm_packages.is_empty());
+    }
+
+    #[test]
+    fn load_config_type_mismatch_in_toml_returns_error() {
+        let guard = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // hetzner should be a table but is given as a string — build() succeeds
+        // (valid TOML) but try_deserialize() fails on the type mismatch.
+        let toml = r#"hetzner = "not_a_table""#;
+        let path = write_temp_config(&dir, toml);
+        let result = with_env_locked(
+            &guard,
+            &[("HETZNER__API_TOKEN", None), ("TAILSCALE__API_KEY", None)],
+            || load_config_from(path),
+        );
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.err().unwrap());
+        assert!(msg.contains("Failed to parse"), "got: {msg}");
+    }
 }
