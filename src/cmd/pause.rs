@@ -169,8 +169,6 @@ fn pause_with<A: PauseActions>(
         existing.username,
         existing.hostname,
         Some(image_id),
-        existing.applied_runtime,
-        existing.applied_provisioning,
     );
     actions.save_state(&project.id, &paused_state)?;
 
@@ -206,8 +204,6 @@ mod tests {
                 username: s.username.clone(),
                 hostname: s.hostname.clone(),
                 snapshot_id: s.snapshot_id,
-                applied_runtime: s.applied_runtime.clone(),
-                applied_provisioning: s.applied_provisioning.clone(),
             }))
         }
 
@@ -290,8 +286,6 @@ mod tests {
                 username: s.username.clone(),
                 hostname: s.hostname.clone(),
                 snapshot_id: s.snapshot_id,
-                applied_runtime: s.applied_runtime.clone(),
-                applied_provisioning: s.applied_provisioning.clone(),
             }));
             Ok(())
         }
@@ -326,8 +320,6 @@ mod tests {
                 username: "u".to_string(),
                 hostname: "".to_string(),
                 snapshot_id: None,
-                applied_runtime: None,
-                applied_provisioning: None,
             }),
         };
         let err = run_with(&deps).unwrap_err();
@@ -344,8 +336,6 @@ mod tests {
             username: "alice".to_string(),
             hostname: "".to_string(),
             snapshot_id: None,
-            applied_runtime: None,
-            applied_provisioning: None,
         };
         pause_with(&mut actions, &project(), existing).unwrap();
 
@@ -383,8 +373,6 @@ mod tests {
             username: "alice".to_string(),
             hostname: "gob-custom".to_string(),
             snapshot_id: None,
-            applied_runtime: None,
-            applied_provisioning: None,
         };
         pause_with(&mut actions, &project(), existing).unwrap();
         assert!(actions.calls.borrow().contains(&"save_state".to_string()));

@@ -225,8 +225,6 @@ mod tests {
             username: "u".to_string(),
             hostname: "".to_string(),
             snapshot_id: Some(99),
-            applied_runtime: None,
-            applied_provisioning: None,
         };
 
         teardown_with(&mut actions, &project(), &existing).unwrap();
@@ -255,8 +253,6 @@ mod tests {
             username: "u".to_string(),
             hostname: "gob-custom".to_string(),
             snapshot_id: None,
-            applied_runtime: None,
-            applied_provisioning: None,
         };
 
         teardown_with(&mut actions, &project(), &existing).unwrap();
@@ -288,8 +284,6 @@ mod tests {
             username: "u".to_string(),
             hostname: "gob-custom".to_string(),
             snapshot_id: Some(99),
-            applied_runtime: None,
-            applied_provisioning: None,
         };
 
         teardown_with(&mut actions, &project(), &existing).unwrap();

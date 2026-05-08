@@ -37,8 +37,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
 
     // 3. Load project config
     let project_config = project_config::load_project_config(&project.root)?;
-    let current_runtime = current_runtime_config(&cfg, &project_config);
-    let current_provisioning = current_provisioning_config(&project, &cfg, &project_config);
 
     // 4. Check existing state
     if let Some(existing) = state::load_state(&project.id)? {
@@ -78,15 +76,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                         let username = existing.username.clone();
                         let sess = SshSession::new(&username, &ip);
                         ssh::wait_for_ssh(&sess)?;
-                        reconcile_runtime_config(
-                            &sess,
-                            existing.applied_runtime.as_ref(),
-                            &current_runtime,
-                        );
-                        warn_for_provisioning_changes(
-                            existing.applied_provisioning.as_ref(),
-                            &current_provisioning,
-                        );
                         let hostname = existing.hostname_or_default(&project.name);
                         state::save_state(
                             &project.id,
@@ -96,8 +85,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                                 username.clone(),
                                 hostname.clone(),
                                 existing.snapshot_id,
-                                Some(current_runtime.clone()),
-                                Some(current_provisioning.clone()),
                             ),
                         )?;
                         return Ok(Env {
@@ -143,12 +130,29 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
     // 6. Create server with cloud-init
     let username = whoami();
     let tailscale_auth_key = resolve_tailscale_auth_key(&cfg)?;
+    let toolchains: Vec<state::Toolchain> = state::Toolchain::all()
+        .iter()
+        .filter(|t| t.detect(&project.root))
+        .cloned()
+        .collect();
+    let project_specs: Vec<PackageSpec> = project_config
+        .packages
+        .iter()
+        .map(|n| PackageSpec::Apt { name: n.clone() })
+        .chain(
+            project_config
+                .binstall_packages
+                .iter()
+                .map(|n| PackageSpec::CargoBinstall { name: n.clone() }),
+        )
+        .collect();
+    let packages = merge_package_specs(&cfg.vm_packages, &project_specs);
     let user_data = cloud_init::build_cloud_init(
         &username,
         ssh_pubkey.trim(),
         &tailscale_auth_key,
-        &current_provisioning.toolchains,
-        &current_runtime.packages,
+        &toolchains,
+        &packages,
     );
     let server_name = format!("gob-{}", project.name);
     println!(
@@ -181,8 +185,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         username.clone(),
         server_name.clone(),
         None,
-        Some(current_runtime.clone()),
-        Some(current_provisioning.clone()),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -198,8 +200,6 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
         username.clone(),
         server_name.clone(),
         None,
-        Some(current_runtime.clone()),
-        Some(current_provisioning.clone()),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -242,28 +242,6 @@ pub fn run(reset: bool) -> Result<()> {
     Ok(())
 }
 
-fn current_runtime_config(
-    cfg: &config::Config,
-    project_config: &project_config::ProjectConfig,
-) -> state::AppliedRuntimeConfig {
-    let project_specs: Vec<PackageSpec> = project_config
-        .packages
-        .iter()
-        .map(|n| PackageSpec::Apt { name: n.clone() })
-        .chain(
-            project_config
-                .binstall_packages
-                .iter()
-                .map(|n| PackageSpec::CargoBinstall { name: n.clone() }),
-        )
-        .collect();
-    state::AppliedRuntimeConfig {
-        packages: merge_package_specs(&cfg.vm_packages, &project_specs),
-        serve_ports: project_config.serve_ports.clone(),
-        ..Default::default()
-    }
-}
-
 /// Combine user-level and project-level package specs.
 /// Project specs whose name already appears in the user list are not duplicated.
 fn merge_package_specs(user: &[PackageSpec], project: &[PackageSpec]) -> Vec<PackageSpec> {
@@ -274,162 +252,6 @@ fn merge_package_specs(user: &[PackageSpec], project: &[PackageSpec]) -> Vec<Pac
         }
     }
     result
-}
-
-fn current_provisioning_config(
-    project: &project::Project,
-    cfg: &config::Config,
-    project_config: &project_config::ProjectConfig,
-) -> state::AppliedProvisioningConfig {
-    let toolchains = state::Toolchain::all()
-        .iter()
-        .filter(|t| t.detect(&project.root))
-        .cloned()
-        .collect();
-    state::AppliedProvisioningConfig {
-        server_type: project_config.server_type.clone(),
-        toolchains,
-        dotfiles_repo: cfg.dotfiles_repo.clone(),
-        dotfiles_install: cfg.dotfiles_install.clone(),
-        ..Default::default()
-    }
-}
-
-fn warn_for_provisioning_changes(
-    previous: Option<&state::AppliedProvisioningConfig>,
-    current: &state::AppliedProvisioningConfig,
-) {
-    let changed = provisioning_change_messages(previous, current);
-    if !changed.is_empty() {
-        eprintln!("Warning: provisioning-time settings changed:");
-        for change in changed {
-            eprintln!("  - {}", change);
-        }
-        eprintln!("Run `gob up --reset` to apply these provisioning changes.");
-    }
-}
-
-fn provisioning_change_messages(
-    previous: Option<&state::AppliedProvisioningConfig>,
-    current: &state::AppliedProvisioningConfig,
-) -> Vec<String> {
-    let Some(previous) = previous else {
-        return Vec::new();
-    };
-
-    let mut changed = Vec::new();
-    if previous.server_type != current.server_type {
-        changed.push(format!(
-            "server_type: '{}' -> '{}'",
-            previous.server_type, current.server_type
-        ));
-    }
-    if previous.toolchains != current.toolchains {
-        changed.push(format!(
-            "toolchains: {:?} -> {:?}",
-            previous.toolchains, current.toolchains
-        ));
-    }
-    if previous.dotfiles_repo != current.dotfiles_repo {
-        changed.push(format!(
-            "dotfiles.repo: {:?} -> {:?}",
-            previous.dotfiles_repo, current.dotfiles_repo
-        ));
-    }
-    if previous.dotfiles_install != current.dotfiles_install {
-        changed.push(format!(
-            "dotfiles.install: {:?} -> {:?}",
-            previous.dotfiles_install, current.dotfiles_install
-        ));
-    }
-    changed
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct RuntimeConfigDelta {
-    added: Vec<PackageSpec>,
-    removed: Vec<PackageSpec>,
-}
-
-fn runtime_config_delta(
-    previous: Option<&state::AppliedRuntimeConfig>,
-    current: &state::AppliedRuntimeConfig,
-) -> RuntimeConfigDelta {
-    let previous_packages = previous.map(|c| c.packages.as_slice()).unwrap_or(&[]);
-
-    let removed = previous_packages
-        .iter()
-        .filter(|p| !current.packages.iter().any(|c| c.name() == p.name()))
-        .cloned()
-        .collect();
-    let added = current
-        .packages
-        .iter()
-        .filter(|p| !previous_packages.iter().any(|prev| prev.name() == p.name()))
-        .cloned()
-        .collect();
-
-    RuntimeConfigDelta { added, removed }
-}
-
-fn reconcile_runtime_config(
-    sess: &SshSession,
-    previous: Option<&state::AppliedRuntimeConfig>,
-    current: &state::AppliedRuntimeConfig,
-) {
-    reconcile_runtime_config_with(sess.username(), previous, current, |remote_cmd| {
-        ssh::run_remote_status(sess, remote_cmd)
-            .map(|s| s.success())
-            .unwrap_or(false)
-    });
-}
-
-fn reconcile_runtime_config_with<F>(
-    username: &str,
-    previous: Option<&state::AppliedRuntimeConfig>,
-    current: &state::AppliedRuntimeConfig,
-    mut run_remote: F,
-) where
-    F: FnMut(&str) -> bool,
-{
-    let delta = runtime_config_delta(previous, current);
-
-    let mut non_reconcilable: Vec<&PackageSpec> = Vec::new();
-    for spec in &delta.added {
-        match spec.runtime_install_cmd(username) {
-            Some(cmd) => {
-                println!("Installing newly configured package '{}'...", spec.name());
-                if !run_remote(&cmd) {
-                    eprintln!("Warning: failed to install package '{}'", spec.name());
-                }
-            }
-            None => non_reconcilable.push(spec),
-        }
-    }
-    if !non_reconcilable.is_empty() {
-        eprintln!(
-            "Warning: the following packages require `gob up --reset` to install (cargo-binstall): {}",
-            non_reconcilable
-                .iter()
-                .map(|s| s.name())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-
-    if !delta.removed.is_empty() {
-        eprintln!(
-            "Warning: removed packages are not auto-uninstalled: {}",
-            delta
-                .removed
-                .iter()
-                .map(|s| s.name())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-
-    reconcile_tailscale_serve_with(&current.serve_ports, &mut run_remote);
 }
 
 #[instrument(
@@ -445,9 +267,6 @@ fn restore_from_snapshot(
     existing: &state::ProjectState,
     project_config: &project_config::ProjectConfig,
 ) -> Result<Env> {
-    let current_runtime = current_runtime_config(cfg, project_config);
-    let current_provisioning = current_provisioning_config(project, cfg, project_config);
-
     println!("Restoring from snapshot (image: {})...", snapshot_id);
 
     let server_name = existing.hostname_or_default(&project.name);
@@ -484,8 +303,6 @@ fn restore_from_snapshot(
         username.clone(),
         server_name.clone(),
         None,
-        Some(current_runtime.clone()),
-        Some(current_provisioning.clone()),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -500,8 +317,6 @@ fn restore_from_snapshot(
         username.clone(),
         server_name.clone(),
         None,
-        Some(current_runtime.clone()),
-        Some(current_provisioning.clone()),
     );
     state::save_state(&project.id, &project_state)?;
 
@@ -529,11 +344,7 @@ fn restore_from_snapshot(
     }
 
     // Configure tailscale serve ports
-    reconcile_runtime_config(&sess, existing.applied_runtime.as_ref(), &current_runtime);
-    warn_for_provisioning_changes(
-        existing.applied_provisioning.as_ref(),
-        &current_provisioning,
-    );
+    setup_tailscale_serve(&sess, &project_config.serve_ports);
 
     // Push project and re-copy SSH key (repo and origin are in the snapshot)
     push_to_vm(&project.root, &sess, &server_name, &project.name)?;
@@ -896,7 +707,6 @@ fn ensure_goblin_ssh_key() -> Result<String> {
 mod tests {
     use super::*;
     use std::cell::RefCell;
-    use std::path::PathBuf;
 
     #[test]
     fn whoami_uses_user_env() {
@@ -909,207 +719,6 @@ mod tests {
             None => std::env::remove_var(key),
         }
         assert_eq!(result, "gobtest");
-    }
-
-    fn test_config() -> config::Config {
-        config::Config {
-            hetzner_api_token: "h".to_string(),
-            tailscale_auth_key: None,
-            tailscale_api_key: "t".to_string(),
-            tailscale_tags: vec![],
-            dotfiles_repo: Some("git@example.com:dotfiles.git".to_string()),
-            dotfiles_install: Some("./install.sh".to_string()),
-            vm_packages: vec![
-                PackageSpec::Apt {
-                    name: "jq".to_string(),
-                },
-                PackageSpec::Apt {
-                    name: "ripgrep".to_string(),
-                },
-                PackageSpec::CurlInstaller {
-                    name: "claude-code".to_string(),
-                    url: "https://claude.ai/install.sh".to_string(),
-                },
-            ],
-        }
-    }
-
-    fn test_project(root: PathBuf) -> project::Project {
-        project::Project {
-            root,
-            name: "proj".to_string(),
-            id: "proj-1".to_string(),
-        }
-    }
-
-    #[test]
-    fn current_runtime_config_maps_values() {
-        let cfg = test_config();
-        let project_cfg = project_config::ProjectConfig {
-            serve_ports: vec![3000, 8080],
-            server_type: "cx42".to_string(),
-            packages: vec![],
-            binstall_packages: vec![],
-        };
-        let runtime = current_runtime_config(&cfg, &project_cfg);
-        assert_eq!(
-            runtime.packages,
-            vec![
-                PackageSpec::Apt {
-                    name: "jq".to_string()
-                },
-                PackageSpec::Apt {
-                    name: "ripgrep".to_string()
-                },
-                PackageSpec::CurlInstaller {
-                    name: "claude-code".to_string(),
-                    url: "https://claude.ai/install.sh".to_string(),
-                },
-            ]
-        );
-        assert_eq!(runtime.serve_ports, vec![3000, 8080]);
-    }
-
-    #[test]
-    fn current_runtime_config_merges_project_packages() {
-        let cfg = test_config(); // vm_packages = [Apt("jq"), Apt("ripgrep"), CurlInstaller("claude-code")]
-        let project_cfg = project_config::ProjectConfig {
-            serve_ports: vec![],
-            server_type: "cx23".to_string(),
-            packages: vec!["nodejs".to_string(), "jq".to_string()], // jq is a duplicate
-            binstall_packages: vec![],
-        };
-        let runtime = current_runtime_config(&cfg, &project_cfg);
-        // jq appears in both lists but must not be duplicated
-        assert_eq!(
-            runtime.packages,
-            vec![
-                PackageSpec::Apt {
-                    name: "jq".to_string()
-                },
-                PackageSpec::Apt {
-                    name: "ripgrep".to_string()
-                },
-                PackageSpec::CurlInstaller {
-                    name: "claude-code".to_string(),
-                    url: "https://claude.ai/install.sh".to_string(),
-                },
-                PackageSpec::Apt {
-                    name: "nodejs".to_string()
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn current_provisioning_config_detects_rust_project() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
-        let cfg = test_config();
-        let project_cfg = project_config::ProjectConfig {
-            serve_ports: vec![],
-            server_type: "cx42".to_string(),
-            packages: vec![],
-            binstall_packages: vec![],
-        };
-        let provisioning = current_provisioning_config(
-            &test_project(dir.path().to_path_buf()),
-            &cfg,
-            &project_cfg,
-        );
-        assert_eq!(provisioning.server_type, "cx42");
-        assert!(provisioning.toolchains.contains(&state::Toolchain::Rust));
-        assert_eq!(
-            provisioning.dotfiles_repo,
-            Some("git@example.com:dotfiles.git".to_string())
-        );
-        assert_eq!(
-            provisioning.dotfiles_install,
-            Some("./install.sh".to_string())
-        );
-    }
-
-    #[test]
-    fn current_provisioning_config_detects_python_project() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname=\"x\"\n").unwrap();
-        let cfg = test_config();
-        let project_cfg = project_config::ProjectConfig::default();
-        let provisioning = current_provisioning_config(
-            &test_project(dir.path().to_path_buf()),
-            &cfg,
-            &project_cfg,
-        );
-        assert!(provisioning.toolchains.contains(&state::Toolchain::Python));
-        assert!(!provisioning.toolchains.contains(&state::Toolchain::Rust));
-    }
-
-    #[test]
-    fn provisioning_change_messages_reports_all_differences() {
-        let previous = state::AppliedProvisioningConfig {
-            server_type: "cx23".to_string(),
-            toolchains: vec![],
-            dotfiles_repo: None,
-            dotfiles_install: None,
-            ..Default::default()
-        };
-        let current = state::AppliedProvisioningConfig {
-            server_type: "cx42".to_string(),
-            toolchains: vec![state::Toolchain::Rust],
-            dotfiles_repo: Some("git@example.com:dotfiles.git".to_string()),
-            dotfiles_install: Some("./install.sh".to_string()),
-            ..Default::default()
-        };
-        let changes = provisioning_change_messages(Some(&previous), &current);
-        assert_eq!(changes.len(), 4);
-        assert!(changes.iter().any(|c| c.contains("server_type")));
-        assert!(changes.iter().any(|c| c.contains("toolchains")));
-        assert!(changes.iter().any(|c| c.contains("dotfiles.repo")));
-        assert!(changes.iter().any(|c| c.contains("dotfiles.install")));
-        assert!(provisioning_change_messages(None, &current).is_empty());
-    }
-
-    #[test]
-    fn runtime_config_delta_tracks_added_and_removed_entries() {
-        let previous = state::AppliedRuntimeConfig {
-            packages: vec![
-                PackageSpec::Apt {
-                    name: "git".to_string(),
-                },
-                PackageSpec::Apt {
-                    name: "jq".to_string(),
-                },
-                PackageSpec::CurlInstaller {
-                    name: "claude-code".to_string(),
-                    url: "https://claude.ai/install.sh".to_string(),
-                },
-            ],
-            serve_ports: vec![3000],
-            ..Default::default()
-        };
-        let current = state::AppliedRuntimeConfig {
-            packages: vec![
-                PackageSpec::Apt {
-                    name: "jq".to_string(),
-                },
-                PackageSpec::Apt {
-                    name: "ripgrep".to_string(),
-                },
-                PackageSpec::CurlInstaller {
-                    name: "opencode".to_string(),
-                    url: "https://opencode.ai/install".to_string(),
-                },
-            ],
-            serve_ports: vec![8080],
-            ..Default::default()
-        };
-        let delta = runtime_config_delta(Some(&previous), &current);
-        assert_eq!(delta.added.len(), 2);
-        assert!(delta.added.iter().any(|s| s.name() == "ripgrep"));
-        assert!(delta.added.iter().any(|s| s.name() == "opencode"));
-        assert_eq!(delta.removed.len(), 2);
-        assert!(delta.removed.iter().any(|s| s.name() == "git"));
-        assert!(delta.removed.iter().any(|s| s.name() == "claude-code"));
     }
 
     #[test]
@@ -1127,44 +736,6 @@ mod tests {
                 "sudo tailscale serve --bg 8080".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn reconcile_runtime_config_with_applies_additions_and_serve() {
-        let previous = state::AppliedRuntimeConfig {
-            packages: vec![PackageSpec::Apt {
-                name: "git".to_string(),
-            }],
-            serve_ports: vec![1234],
-            ..Default::default()
-        };
-        let current = state::AppliedRuntimeConfig {
-            packages: vec![
-                PackageSpec::Apt {
-                    name: "git".to_string(),
-                },
-                PackageSpec::Apt {
-                    name: "jq".to_string(),
-                },
-                PackageSpec::CurlInstaller {
-                    name: "claude-code".to_string(),
-                    url: "https://claude.ai/install.sh".to_string(),
-                },
-            ],
-            serve_ports: vec![3000],
-            ..Default::default()
-        };
-        let calls = RefCell::new(Vec::<String>::new());
-        reconcile_runtime_config_with("alice", Some(&previous), &current, |cmd| {
-            calls.borrow_mut().push(cmd.to_string());
-            true
-        });
-        let calls = calls.into_inner();
-        assert!(calls[0].contains("apt-get install -y jq"));
-        assert!(calls[1].contains("claude.ai/install.sh"));
-        assert_eq!(calls[2], "sudo tailscale serve reset");
-        assert_eq!(calls[3], "sudo tailscale serve --bg 3000");
-        assert_eq!(calls.len(), 4);
     }
 
     #[test]
