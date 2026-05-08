@@ -8,7 +8,7 @@ use crate::cloud_init;
 use crate::cmd::down;
 use crate::config;
 use crate::hetzner::HetznerClient;
-use crate::packages::PackageSpec;
+use crate::packages::{resolve_coding_agent, PackageSpec};
 use crate::project;
 use crate::project_config;
 use crate::ssh::{self, SshSession};
@@ -145,6 +145,13 @@ pub fn ensure_running(reset: bool) -> Result<Env> {
                 .iter()
                 .map(|n| PackageSpec::CargoBinstall { name: n.clone() }),
         )
+        .chain(project_config.coding_agents.iter().filter_map(|name| {
+            let spec = resolve_coding_agent(name);
+            if spec.is_none() {
+                warn!(agent = %name, "unknown coding_agent in project config, skipping");
+            }
+            spec
+        }))
         .collect();
     let packages = merge_package_specs(&cfg.vm_packages, &project_specs);
     let user_data = cloud_init::build_cloud_init(

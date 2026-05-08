@@ -196,7 +196,11 @@ serve_ports = [3000, 8080]
 packages = ["nodejs", "postgresql-client"]
 
 # Extra cargo-binstall packages for this project's VM (optional).
-cargo_packages = ["git-absorb"]
+binstall_packages = ["git-absorb"]
+
+# Coding agents to install on this project's VM (optional).
+# Supported values: "claude-code", "opencode", "pi"
+coding_agents = ["claude-code"]
 ```
 
 #### Reference
@@ -206,4 +210,5 @@ cargo_packages = ["git-absorb"]
 | `server_type` | string | `"cx23"` | Hetzner server type for the VM |
 | `serve_ports` | integer[] | `[]` | Ports exposed via `tailscale serve` on the VM |
 | `packages` | string[] | `[]` | Extra APT packages installed on the VM, merged with user config `vm.packages` |
-| `cargo_packages` | string[] | `[]` | Extra packages installed via cargo-binstall, merged with user config `vm.cargo_packages` |
+| `binstall_packages` | string[] | `[]` | Extra packages installed via cargo-binstall, merged with user config `vm.binstall_packages` |
+| `coding_agents` | string[] | `[]` | Coding agents to install (`"claude-code"`, `"opencode"`, `"pi"`), merged with user config `vm.coding_agents` |

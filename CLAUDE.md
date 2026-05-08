@@ -7,9 +7,15 @@ CLI tool (`gob`) for managing ephemeral Hetzner dev VMs with Tailscale networkin
 ```
 cargo build          # build
 cargo build 2>&1     # build, check for warnings
+cargo test           # run unit tests
+just ci              # fmt check + clippy + coverage check (must pass before PR)
 ```
 
-There are no tests yet. Binary is `gob`.
+Binary is `gob`. Tests use the dependency-injection pattern: commands expose a `run_with(deps, ...)` function taking trait objects so pure logic can be tested without hitting real APIs.
+
+The coverage baseline is in `.config/coverage-baseline-linux.json`. When coverage drops (e.g. after removing code), **add tests** — never update the baseline with `--save-baseline` to paper over a regression.
+
+`GOBLINMODE_DATA_DIR` env var overrides the state directory (`~/.local/share/goblinmode/`) for tests that exercise `save_state`/`load_state`/`delete_state`.
 
 ## Architecture
 

@@ -19,6 +19,9 @@ pub struct ProjectConfig {
     /// Extra cargo-binstall packages installed on this project's VM.
     #[serde(default)]
     pub binstall_packages: Vec<String>,
+    /// Coding agents to install on this project's VM.
+    #[serde(default)]
+    pub coding_agents: Vec<String>,
 }
 
 impl Default for ProjectConfig {
@@ -28,6 +31,7 @@ impl Default for ProjectConfig {
             server_type: default_server_type(),
             packages: Vec::new(),
             binstall_packages: Vec::new(),
+            coding_agents: Vec::new(),
         }
     }
 }
@@ -53,6 +57,7 @@ mod tests {
         assert!(config.serve_ports.is_empty());
         assert!(config.packages.is_empty());
         assert!(config.binstall_packages.is_empty());
+        assert!(config.coding_agents.is_empty());
     }
 
     #[test]
@@ -63,6 +68,7 @@ mod tests {
         assert!(config.serve_ports.is_empty());
         assert!(config.packages.is_empty());
         assert!(config.binstall_packages.is_empty());
+        assert!(config.coding_agents.is_empty());
     }
 
     #[test]
@@ -120,6 +126,20 @@ mod tests {
         .unwrap();
         let config = load_project_config(dir.path()).unwrap();
         assert_eq!(config.binstall_packages, vec!["jj-cli"]);
+    }
+
+    #[test]
+    fn coding_agents_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("goblinmode.toml"),
+            "coding_agents = [\"claude-code\"]\n",
+        )
+        .unwrap();
+        let config = load_project_config(dir.path()).unwrap();
+        assert_eq!(config.coding_agents, vec!["claude-code"]);
     }
 
     #[test]
