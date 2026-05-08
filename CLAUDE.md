@@ -49,3 +49,4 @@ The coverage baseline is in `.config/coverage-baseline-linux.json`. When coverag
 - You can use `fj` command-line tool to interact with Forgejo
 - Run `cargo fmt` before committing.
 - `just ci` should pass before you submit a PR.
+- `main` is a protected branch — always work on a feature branch and open a PR.

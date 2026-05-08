@@ -135,7 +135,7 @@ packages = ["jq", "ripgrep", "tmux"]
 coding_agents = ["claude-code"]
 
 # Extra packages to install via cargo-binstall on every VM (optional).
-cargo_packages = ["jj-cli"]
+binstall_packages = ["jj-cli"]
 ```
 
 #### Secrets (API tokens and keys)
@@ -172,7 +172,7 @@ work. Output is trimmed of leading/trailing whitespace.
 | `dotfiles.install` | string | no | Install script path relative to `~/dotfiles` |
 | `vm.packages` | string[] | no | Extra APT packages installed on the VM |
 | `vm.coding_agents` | string[] | no | Coding agents to install (`"claude-code"`, `"opencode"`, `"pi"`) |
-| `vm.cargo_packages` | string[] | no | Extra packages installed via cargo-binstall (e.g. `"jj-cli"`) |
+| `vm.binstall_packages` | string[] | no | Extra packages installed via cargo-binstall (e.g. `"jj-cli"`) |
 
 \* At least one of the plain-text or `_cmd` variant is required.
 
