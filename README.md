@@ -131,7 +131,7 @@ install = "./install.sh"
 packages = ["jq", "ripgrep", "tmux"]
 
 # Coding agents to install on every VM (optional).
-# Supported values: "claude-code", "opencode"
+# Supported values: "claude-code", "opencode", "pi"
 coding_agents = ["claude-code"]
 
 # Extra packages to install via cargo-binstall on every VM (optional).
@@ -144,17 +144,18 @@ Secrets (`api_token`, `api_key`, `auth_key`) can be provided in three ways,
 checked in this priority order:
 
 1. **Environment variable** — always wins if set and non-empty
-2. **`_cmd` field** — runs a shell command; stdout becomes the secret value
-3. **Plain text value** — stored directly in the config file
+2. **Plain text value** — stored directly in the config file
+3. **`_cmd` field** — runs a shell command; stdout becomes the secret value
 
 | Secret | Config field | `_cmd` field | Environment variable |
 |---|---|---|---|
-| Hetzner API token | `hetzner.api_token` | `hetzner.api_token_cmd` | `HETZNER_API_TOKEN` |
-| Tailscale API key | `tailscale.api_key` | `tailscale.api_key_cmd` | `TAILSCALE_API_KEY` |
-| Tailscale auth key | `tailscale.auth_key` | `tailscale.auth_key_cmd` | `TAILSCALE_AUTH_KEY` |
+| Hetzner API token | `hetzner.api_token` | `hetzner.api_token_cmd` | `HETZNER__API_TOKEN` |
+| Tailscale API key | `tailscale.api_key` | `tailscale.api_key_cmd` | `TAILSCALE__API_KEY` |
+| Tailscale auth key | `tailscale.auth_key` | `tailscale.auth_key_cmd` | `TAILSCALE__AUTH_KEY` |
 
-The `_cmd` is run with `sh -c`, so shell features (pipes, substitutions) work.
-Output is trimmed of leading/trailing whitespace.
+Environment variables use `__` (double underscore) as a separator for nested
+keys. The `_cmd` is run with `sh -c`, so shell features (pipes, substitutions)
+work. Output is trimmed of leading/trailing whitespace.
 
 #### Reference
 
@@ -170,7 +171,7 @@ Output is trimmed of leading/trailing whitespace.
 | `dotfiles.repo` | string | no | Git URL for dotfiles repo |
 | `dotfiles.install` | string | no | Install script path relative to `~/dotfiles` |
 | `vm.packages` | string[] | no | Extra APT packages installed on the VM |
-| `vm.coding_agents` | string[] | no | Coding agents to install (`"claude-code"`, `"opencode"`) |
+| `vm.coding_agents` | string[] | no | Coding agents to install (`"claude-code"`, `"opencode"`, `"pi"`) |
 | `vm.cargo_packages` | string[] | no | Extra packages installed via cargo-binstall (e.g. `"jj-cli"`) |
 
 \* At least one of the plain-text or `_cmd` variant is required.
