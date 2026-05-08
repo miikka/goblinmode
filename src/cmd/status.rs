@@ -121,8 +121,6 @@ mod tests {
                 username: s.username.clone(),
                 hostname: s.hostname.clone(),
                 snapshot_id: s.snapshot_id,
-                applied_runtime: s.applied_runtime.clone(),
-                applied_provisioning: s.applied_provisioning.clone(),
             }))
         }
 
@@ -199,8 +197,6 @@ mod tests {
                 username: "alice".to_string(),
                 hostname: "".to_string(),
                 snapshot_id: None,
-                applied_runtime: None,
-                applied_provisioning: None,
             }),
             status: Some(("running".to_string(), "5.6.7.8".to_string())),
         };
@@ -229,8 +225,6 @@ mod tests {
                 username: "alice".to_string(),
                 hostname: "gob-custom".to_string(),
                 snapshot_id: None,
-                applied_runtime: None,
-                applied_provisioning: None,
             }),
             status: None,
         };

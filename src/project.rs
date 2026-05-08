@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
 pub struct Project {
     pub root: PathBuf,
     pub name: String,
@@ -10,7 +11,11 @@ pub struct Project {
 }
 
 pub fn detect_project() -> Result<Project> {
-    let mut dir = std::env::current_dir()?;
+    detect_project_from(std::env::current_dir()?.as_path())
+}
+
+pub(crate) fn detect_project_from(start: &Path) -> Result<Project> {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join(".git").exists() {
             let name = dir
@@ -41,6 +46,45 @@ pub(crate) fn make_project_id(name: &str, path: &Path) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn detect_project_from_finds_git_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let project = detect_project_from(dir.path()).unwrap();
+        assert_eq!(project.root, dir.path());
+    }
+
+    #[test]
+    fn detect_project_from_walks_up_to_find_git() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let subdir = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let project = detect_project_from(&subdir).unwrap();
+        assert_eq!(project.root, dir.path());
+    }
+
+    #[test]
+    fn detect_project_from_errors_outside_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = detect_project_from(dir.path()).unwrap_err();
+        assert!(format!("{err}").contains("Not in a git repository"));
+    }
+
+    #[test]
+    fn detect_project_from_uses_dir_name_as_project_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let project = detect_project_from(dir.path()).unwrap();
+        let expected_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(project.name, expected_name);
+    }
 
     #[test]
     fn make_project_id_format() {

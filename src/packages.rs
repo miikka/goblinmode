@@ -39,24 +39,6 @@ impl PackageSpec {
             }
         }
     }
-
-    /// Returns the shell command to install this package at runtime on an
-    /// already-provisioned VM.  Returns `None` for `CargoBinstall` because
-    /// that requires cargo-binstall to already be set up — use `--reset`.
-    pub fn runtime_install_cmd(&self, username: &str) -> Option<String> {
-        match self {
-            PackageSpec::Apt { name } => Some(format!(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {name}"
-            )),
-            PackageSpec::CurlInstaller { url, .. } => {
-                Some(format!("su - {username} -c 'curl -fsSL {url} | bash'"))
-            }
-            PackageSpec::CargoBinstall { .. } => None,
-            PackageSpec::Npm { package, .. } => {
-                Some(format!("su - {username} -c 'npm install -g {package}'"))
-            }
-        }
-    }
 }
 
 /// Resolve a known coding-agent short name to its `PackageSpec`.
@@ -101,8 +83,6 @@ mod tests {
         let cmd = spec.cloud_init_runcmd("alice").unwrap();
         assert!(cmd.contains("https://claude.ai/install.sh"));
         assert!(cmd.contains("su - alice"));
-        let runtime = spec.runtime_install_cmd("alice").unwrap();
-        assert_eq!(cmd, runtime);
     }
 
     #[test]
@@ -114,23 +94,13 @@ mod tests {
     }
 
     #[test]
-    fn apt_has_runtime_install_cmd() {
-        let spec = PackageSpec::Apt {
-            name: "vim".to_string(),
-        };
-        let cmd = spec.runtime_install_cmd("alice").unwrap();
-        assert!(cmd.contains("apt-get install -y vim"));
-    }
-
-    #[test]
-    fn cargo_binstall_has_runcmd_but_no_runtime_cmd() {
+    fn cargo_binstall_has_runcmd() {
         let spec = PackageSpec::CargoBinstall {
             name: "jj-cli".to_string(),
         };
         let runcmd = spec.cloud_init_runcmd("alice").unwrap();
         assert!(runcmd.contains("cargo-binstall"));
         assert!(runcmd.contains("jj-cli"));
-        assert!(spec.runtime_install_cmd("alice").is_none());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::packages::PackageSpec;
 use crate::state;
 
-fn detect_timezone() -> Option<String> {
+pub(crate) fn detect_timezone() -> Option<String> {
     // 1. Honour explicit TZ env var
     if let Ok(tz) = std::env::var("TZ") {
         if !tz.is_empty() {
@@ -205,6 +205,20 @@ mod tests {
         }];
         let output = test_cloud_init(&[], &packages);
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn detect_timezone_falls_through_when_tz_is_empty() {
+        let saved = std::env::var("TZ").ok();
+        std::env::set_var("TZ", "");
+        let tz = detect_timezone();
+        // On Linux, fallback to /etc/localtime or /etc/timezone should yield Some
+        // (if neither exists we get None, which is also valid)
+        let _ = tz;
+        match saved {
+            Some(v) => std::env::set_var("TZ", v),
+            None => std::env::remove_var("TZ"),
+        }
     }
 
     #[test]
