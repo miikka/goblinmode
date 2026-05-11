@@ -29,6 +29,8 @@ struct Server {
     name: String,
     status: String,
     public_net: PublicNet,
+    #[serde(default)]
+    created: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,6 +331,7 @@ impl HetznerClient {
                 name: s.name,
                 status: s.status,
                 ipv4: s.public_net.ipv4.ip,
+                created: s.created,
             })
             .collect())
     }
@@ -356,6 +359,8 @@ pub struct ServerInfo {
     pub name: String,
     pub status: String,
     pub ipv4: String,
+    /// RFC3339 creation timestamp from Hetzner (e.g. "2024-01-15T10:30:00+00:00").
+    pub created: String,
 }
 
 pub struct SnapshotInfo {

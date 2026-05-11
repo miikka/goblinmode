@@ -57,6 +57,7 @@ variables.
 | `gob zed` | Open the remote project in Zed. |
 | `gob status` | Show the status of the development VM (alias: `gob ps`). |
 | `gob prune` | List and delete all goblinmode-managed servers on Hetzner. |
+| `gob watchdog` | Pause running goblinmode VMs older than `--max-age` (default 8h). Designed for cron. Use `--dry-run` to preview. |
 
 ### Lifecycle
 
@@ -70,6 +71,9 @@ The typical workflow is:
    if you don't need to resume.
 
 All commands use `--trace` for optional debug logging (see below).
+
+For unattended scheduling, see
+[Scheduling `gob watchdog` on macOS (launchd)](docs/watchdog-launchd.md).
 
 ## Debug Traces
 
