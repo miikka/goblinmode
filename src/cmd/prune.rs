@@ -232,6 +232,7 @@ mod tests {
             name: name.to_string(),
             status: "running".to_string(),
             ipv4: "1.2.3.4".to_string(),
+            created: "2026-02-20T00:00:00+00:00".to_string(),
         }
     }
 

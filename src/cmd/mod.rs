@@ -4,4 +4,5 @@ pub mod pause;
 pub mod prune;
 pub mod status;
 pub mod up;
+pub mod watchdog;
 pub mod zed;

@@ -51,6 +51,18 @@ enum Commands {
     Status,
     /// Delete all goblinmode servers on Hetzner
     Prune,
+    /// Pause goblinmode VMs that have been running longer than --max-age.
+    ///
+    /// Designed to be run periodically (e.g. from cron) to clean up forgotten
+    /// VMs. Operates purely on the Hetzner API and does not touch local state.
+    Watchdog {
+        /// Minimum age (in hours) for a running server to be paused
+        #[arg(long, default_value_t = cmd::watchdog::DEFAULT_MAX_AGE_HOURS)]
+        max_age: u64,
+        /// List eligible servers without actually pausing them
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -75,6 +87,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Zed => cmd::zed::run(),
         Commands::Status => cmd::status::run(),
         Commands::Prune => cmd::prune::run(),
+        Commands::Watchdog { max_age, dry_run } => cmd::watchdog::run(max_age, dry_run),
     };
 
     match &result {
@@ -94,5 +107,6 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Zed => "zed",
         Commands::Status => "status",
         Commands::Prune => "prune",
+        Commands::Watchdog { .. } => "watchdog",
     }
 }
