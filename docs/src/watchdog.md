@@ -1,7 +1,9 @@
-# Scheduling `gob watchdog` on macOS (launchd)
+# Watchdog
+
+## Scheduling `gob watchdog` on macOS (launchd)
 
 To clean up forgotten VMs automatically, schedule `gob watchdog` with a
-user-level launchd agent. The example below runs it every hour at :00.
+user-level launchd agent. The example below runs it every hour, on the hour.
 
 1. Find the absolute path to your `gob` binary — launchd does not inherit
    your shell `PATH`:
@@ -48,7 +50,7 @@ user-level launchd agent. The example below runs it every hour at :00.
    </plist>
    ```
 
-3. Load it (and start it on each login automatically):
+3. Load it (it will also start automatically on each login):
 
    ```bash
    launchctl load ~/Library/LaunchAgents/com.goblinmode.watchdog.plist
@@ -60,15 +62,13 @@ user-level launchd agent. The example below runs it every hour at :00.
    tail -f ~/Library/Logs/goblinmode-watchdog.log
    ```
 
-To stop it: `launchctl unload ~/Library/LaunchAgents/com.goblinmode.watchdog.plist`.
+To stop it, run `launchctl unload ~/Library/LaunchAgents/com.goblinmode.watchdog.plist`.
+To run it once on demand without waiting for the next tick, run `launchctl start com.goblinmode.watchdog`.
 
-To run it once on demand without waiting for the next tick:
-`launchctl start com.goblinmode.watchdog`.
-
-## Secrets note
+### A note on secrets
 
 Launchd jobs run with a restricted environment. If your `config.toml`
-uses `_cmd` fields that depend on tools requiring a terminal/keychain
+uses `_cmd` fields that depend on tools requiring a terminal or keychain
 unlock (e.g. `op`, `security`), the watchdog may fail to authenticate.
 The most reliable options for an unattended agent are:
 
