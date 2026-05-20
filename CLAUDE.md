@@ -19,10 +19,9 @@ The coverage baseline is in `.config/coverage-baseline-linux.json`. When coverag
 
 ## Architecture
 
-- `src/main.rs` — CLI entrypoint using clap. Subcommands: `up`, `down`, `pause`, `status`/`ps`, `mosh`, `zed`, `prune`
+- `src/main.rs` — CLI entrypoint using clap. Subcommands: `up`, `down`, `status`/`ps`, `mosh`, `zed`, `prune`
 - `src/cmd/up.rs` — Provisions a VM: creates Hetzner server with cloud-init, waits for SSH and cloud-init, syncs project via rsync, optionally sets up dotfiles, adds git remote
-- `src/cmd/down.rs` — Destroys the VM and cleans up Tailscale device
-- `src/cmd/pause.rs` — Snapshots the VM and destroys the server (resume with `gob up`)
+- `src/cmd/down.rs` — Snapshots the VM and destroys the server by default; use `--destroy` to skip snapshotting (resume paused VM with `gob up`)
 - `src/cmd/status.rs` — Shows VM status for the current project
 - `src/cmd/prune.rs` — Lists and deletes all goblinmode-labeled servers on Hetzner
 - `src/cmd/mosh.rs` — Connects to VM via mosh

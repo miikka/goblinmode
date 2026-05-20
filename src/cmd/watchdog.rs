@@ -74,7 +74,7 @@ impl WatchdogRunner for RealRunner {
 }
 
 /// Snapshot description used by the watchdog, matching the format used by
-/// `gob pause` so that future `gob up` restoration finds the right image.
+/// `gob down` so that future `gob up` restoration finds the right image.
 fn snapshot_description(server_name: &str) -> String {
     let project = server_name.strip_prefix("gob-").unwrap_or(server_name);
     format!("gob-pause-{}", project)

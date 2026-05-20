@@ -34,7 +34,8 @@ enum Commands {
         #[arg(long)]
         reset: bool,
     },
-    /// Snapshot and pause the development VM (use --destroy to skip snapshotting)
+    /// Snapshot the VM and destroy it (resume with `gob up`).
+    /// Use --destroy to skip snapshotting.
     Down {
         /// Destroy the VM immediately without taking a snapshot first
         #[arg(long)]
@@ -44,8 +45,6 @@ enum Commands {
     Mosh,
     /// Open the remote project in Zed
     Zed,
-    /// Snapshot the VM and destroy it (resume with `gob up`)
-    Pause,
     /// Show the status of the development VM
     #[command(alias = "ps")]
     Status,
@@ -82,7 +81,6 @@ fn main() -> anyhow::Result<()> {
     let result = match cli.command {
         Commands::Up { reset } => cmd::up::run(reset),
         Commands::Down { destroy } => cmd::down::run(destroy),
-        Commands::Pause => cmd::pause::run(),
         Commands::Mosh => cmd::mosh::run(),
         Commands::Zed => cmd::zed::run(),
         Commands::Status => cmd::status::run(),
@@ -102,7 +100,6 @@ fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Up { .. } => "up",
         Commands::Down { .. } => "down",
-        Commands::Pause => "pause",
         Commands::Mosh => "mosh",
         Commands::Zed => "zed",
         Commands::Status => "status",
