@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Miikka Koskinen
+//
+// SPDX-License-Identifier: MIT
+
 mod cloud_init;
 mod cmd;
 mod config;

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Miikka Koskinen
+#
+# SPDX-License-Identifier: MIT
+
 [book]
 title = "Goblin Mode"
 authors = ["Miikka Koskinen"]

@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Miikka Koskinen
+
+SPDX-License-Identifier: MIT
+-->
+
 # Introduction
 
 **Goblin Mode** is a command-line tool that spins up a per-project development virtual machine (VM).
@@ -22,3 +28,8 @@ Once you're done, destroy the VM with `gob down`. A snapshot is saved by default
 Goblin Mode was created by [Miikka Koskinen](https://miikka.me/).
 I've written about it [here on my blog](https://quanttype.net/p/goblin-mode/).
 It's [software that I made for myself](https://quanttype.net/p/software-for-myself/).
+
+
+## License
+
+MIT. See `LICENSES` and `REUSE.toml` for full details.

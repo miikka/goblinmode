@@ -1,4 +1,8 @@
 ---
+# SPDX-FileCopyrightText: 2026 Miikka Koskinen
+#
+# SPDX-License-Identifier: MIT
+
 name: forgejo-fj
 description: >
   Use this skill whenever you need to interact with a Forgejo git forge —

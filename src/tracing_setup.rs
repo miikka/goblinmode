@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Miikka Koskinen
+//
+// SPDX-License-Identifier: MIT
+
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

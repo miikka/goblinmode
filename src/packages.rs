@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Miikka Koskinen
+//
+// SPDX-License-Identifier: MIT
+
 use serde::{Deserialize, Serialize};
 
 /// A package to be installed on a VM, along with how to install it.

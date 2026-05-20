@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Miikka Koskinen
+//
+// SPDX-License-Identifier: MIT
+
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, Write};

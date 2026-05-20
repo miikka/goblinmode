@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Miikka Koskinen
+
+SPDX-License-Identifier: MIT
+-->
+
 # Configuration
 
 Goblin Mode uses two config files:

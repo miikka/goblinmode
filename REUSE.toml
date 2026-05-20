@@ -1,0 +1,11 @@
+version = 1
+
+[[annotations]]
+path = "src/snapshots/*"
+SPDX-FileCopyrightText = "2026 Miikka Koskinen"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["Cargo.lock", ".config/coverage-baseline-darwin.json", ".config/coverage-baseline-linux.json"]
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"

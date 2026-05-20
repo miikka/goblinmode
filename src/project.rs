@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Miikka Koskinen
+//
+// SPDX-License-Identifier: MIT
+
 use anyhow::{bail, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

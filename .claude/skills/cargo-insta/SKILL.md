@@ -1,4 +1,8 @@
 ---
+# SPDX-FileCopyrightText: 2026 Miikka Koskinen
+#
+# SPDX-License-Identifier: MIT
+
 name: cargo-insta
 description: Use when the user wants to run, review, accept, or reject snapshot tests with cargo-insta.
 ---

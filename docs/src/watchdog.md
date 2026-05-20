@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Miikka Koskinen
+
+SPDX-License-Identifier: MIT
+-->
+
 # Watchdog
 
 ## Scheduling `gob watchdog` on macOS (launchd)
