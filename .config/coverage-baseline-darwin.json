@@ -1,9 +1,9 @@
 {
-  "created": "2026-05-14T13:20:14.337446+00:00",
+  "created": "2026-05-20T09:44:05.814432+00:00",
   "total": {
-    "percent": 69.93540810334703,
-    "covered": 2382,
-    "count": 3406
+    "percent": 70.91312794893145,
+    "covered": 2555,
+    "count": 3603
   },
   "files": {
     "src/cloud_init.rs": {
@@ -12,24 +12,19 @@
       "count": 162
     },
     "src/cmd/down.rs": {
-      "percent": 69.23076923076923,
-      "covered": 126,
-      "count": 182
+      "percent": 74.35158501440921,
+      "covered": 258,
+      "count": 347
     },
     "src/cmd/mosh.rs": {
       "percent": 73.84615384615385,
       "covered": 48,
       "count": 65
     },
-    "src/cmd/pause.rs": {
-      "percent": 70.98039215686275,
-      "covered": 181,
-      "count": 255
-    },
     "src/cmd/prune.rs": {
-      "percent": 80.3088803088803,
-      "covered": 208,
-      "count": 259
+      "percent": 80.38461538461539,
+      "covered": 209,
+      "count": 260
     },
     "src/cmd/status.rs": {
       "percent": 82.99319727891157,
@@ -37,9 +32,14 @@
       "count": 147
     },
     "src/cmd/up.rs": {
-      "percent": 22.28070175438597,
+      "percent": 21.41652613827993,
       "covered": 127,
-      "count": 570
+      "count": 593
+    },
+    "src/cmd/watchdog.rs": {
+      "percent": 83.96946564885496,
+      "covered": 220,
+      "count": 262
     },
     "src/cmd/zed.rs": {
       "percent": 74.24242424242425,
@@ -52,9 +52,9 @@
       "count": 379
     },
     "src/hetzner.rs": {
-      "percent": 77.27272727272727,
-      "covered": 289,
-      "count": 374
+      "percent": 77.33333333333333,
+      "covered": 290,
+      "count": 375
     },
     "src/http_client.rs": {
       "percent": 65.28925619834712,
