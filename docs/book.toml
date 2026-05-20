@@ -1,0 +1,7 @@
+[book]
+title = "Goblin Mode"
+authors = ["Miikka Koskinen"]
+language = "en"
+
+[output.html]
+site-url = "/goblinmode/"
